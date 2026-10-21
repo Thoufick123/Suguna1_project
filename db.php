@@ -16,22 +16,33 @@ class Database {
 
     public static function getConnection(): PDO {
         if (self::$pdo === null) {
+            // Load config.php if present
+            if (file_exists(__DIR__ . '/config.php')) {
+                require_once __DIR__ . '/config.php';
+            }
+
+            self::$host = defined('DB_HOST') ? DB_HOST : (getenv('DB_HOST') ?: self::$host);
+            self::$port = defined('DB_PORT') ? (string)DB_PORT : (getenv('DB_PORT') ?: self::$port);
+            self::$dbname = defined('DB_NAME') ? DB_NAME : (getenv('DB_NAME') ?: self::$dbname);
+            self::$username = defined('DB_USER') ? DB_USER : (getenv('DB_USER') ?: self::$username);
+            self::$password = defined('DB_PASS') ? DB_PASS : (getenv('DB_PASS') ?: self::$password);
+
             $portsToTry = [self::$port, '3306', '3308'];
-            $portsToTry = array_values(array_unique($portsToTry));
+            $portsToTry = array_values(array_unique(array_filter($portsToTry)));
             $connected = false;
-            $initPdo = null;
             $lastException = null;
 
+            // 1. Direct connection with dbname (standard for Hostinger and shared hosting)
             foreach ($portsToTry as $p) {
                 try {
-                    $initPdo = new PDO(
-                        "mysql:host=" . self::$host . ";port=" . $p . ";charset=utf8mb4",
+                    self::$pdo = new PDO(
+                        "mysql:host=" . self::$host . ";port=" . $p . ";dbname=" . self::$dbname . ";charset=utf8mb4",
                         self::$username,
                         self::$password,
                         [
                             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
                             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-                            PDO::ATTR_TIMEOUT => 2
+                            PDO::ATTR_TIMEOUT => 3
                         ]
                     );
                     self::$port = $p;
@@ -42,37 +53,48 @@ class Database {
                 }
             }
 
-            if (!$connected || !$initPdo) {
+            // 2. If direct connection fails (e.g., local fresh XAMPP where DB is not yet created)
+            if (!$connected) {
+                foreach ($portsToTry as $p) {
+                    try {
+                        $initPdo = new PDO(
+                            "mysql:host=" . self::$host . ";port=" . $p . ";charset=utf8mb4",
+                            self::$username,
+                            self::$password,
+                            [
+                                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                                PDO::ATTR_TIMEOUT => 2
+                            ]
+                        );
+                        $initPdo->exec("CREATE DATABASE IF NOT EXISTS `" . self::$dbname . "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;");
+                        self::$pdo = new PDO(
+                            "mysql:host=" . self::$host . ";port=" . $p . ";dbname=" . self::$dbname . ";charset=utf8mb4",
+                            self::$username,
+                            self::$password,
+                            [
+                                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
+                            ]
+                        );
+                        self::$port = $p;
+                        $connected = true;
+                        break;
+                    } catch (PDOException $e) {
+                        $lastException = $e;
+                    }
+                }
+            }
+
+            if (!$connected || !self::$pdo) {
                 die(json_encode([
                     'success' => false,
-                    'message' => 'XAMPP MySQL Connection Error: ' . ($lastException ? $lastException->getMessage() : 'Unable to connect') . '. Please ensure MySQL is running in XAMPP Control Panel.'
+                    'message' => 'Database Connection Error: ' . ($lastException ? $lastException->getMessage() : 'Unable to connect') . '. Please ensure MySQL is running and credentials are correct.'
                 ]));
             }
 
-            try {
-                // 2. Create database if it doesn't exist
-                $initPdo->exec("CREATE DATABASE IF NOT EXISTS `" . self::$dbname . "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;");
-
-                // 3. Connect directly to the specific database
-                self::$pdo = new PDO(
-                    "mysql:host=" . self::$host . ";port=" . self::$port . ";dbname=" . self::$dbname . ";charset=utf8mb4",
-                    self::$username,
-                    self::$password,
-                    [
-                        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-                        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
-                    ]
-                );
-
-                // 4. Initialize tables and seed data if needed
-                self::initializeTables();
-
-            } catch (PDOException $e) {
-                die(json_encode([
-                    'success' => false,
-                    'message' => 'XAMPP MySQL Database Error: ' . $e->getMessage() . '. Please ensure MySQL is running in XAMPP Control Panel.'
-                ]));
-            }
+            // Initialize tables and seed initial data if needed
+            self::initializeTables();
         }
         return self::$pdo;
     }
