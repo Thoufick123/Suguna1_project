@@ -12,8 +12,8 @@ if ($currentUser && $currentUser['role'] === 'operator') {
     exit;
 }
 
-// Fetch all active production units dynamically
-$unitsStmt = $pdo->query("SELECT * FROM production_units WHERE status = 'Active' ORDER BY id ASC");
+// Fetch all active production units dynamically (ensuring all non-disabled units appear)
+$unitsStmt = $pdo->query("SELECT * FROM production_units WHERE COALESCE(NULLIF(status, ''), 'Active') != 'Disabled' ORDER BY id ASC");
 $productionUnits = $unitsStmt->fetchAll(PDO::FETCH_ASSOC);
 
 $validUnitNames = array_column($productionUnits, 'unit_name');
@@ -2742,7 +2742,7 @@ function openUserDetailsModal(data) {
             unitSection.style.display = 'block';
             if (currUnitDisplay) {
                 currUnitDisplay.innerText = data.unit || 'Unit 1';
-                const uCol = (data.unit && data.unit.toLowerCase().includes('unit 2')) ? 'pink' : ((data.unit && data.unit.toLowerCase().includes('unit 1')) ? 'cyan' : 'emerald');
+                const uCol = getUnitColor(data.unit);
                 currUnitDisplay.className = `badge-pill unit-${uCol}-pill`;
             }
             if (targetUnitSelect) {
@@ -3001,7 +3001,7 @@ function isMatchingUnit(optVal, optTitle, currentUnit) {
     return false;
 }
 
-// Synchronize target unit select dropdown so the user's CURRENT unit is DISABLED
+// Synchronize target unit select dropdown so the user's CURRENT unit is HIDDEN and remaining units are SHOWN
 function syncTargetUnitDropdown(selectEl, currentUnit) {
     if (!selectEl) return;
     const curClean = (currentUnit || '').trim().toLowerCase();
@@ -3018,12 +3018,16 @@ function syncTargetUnitDropdown(selectEl, currentUnit) {
         const isCurrent = isMatchingUnit(opt.value, baseTitle, currentUnit);
 
         if (isCurrent) {
+            // Hide the current unit completely from the transfer options dropdown
+            opt.hidden = true;
+            opt.style.display = 'none';
             opt.disabled = true;
-            opt.text = `${baseTitle} (Current Unit - Disabled)`;
-            opt.title = "User is currently assigned to this unit";
-            opt.style.color = '#94a3b8';
-            opt.style.backgroundColor = 'rgba(255,255,255,0.06)';
+            opt.text = baseTitle;
+            opt.title = "Current Unit (Hidden)";
         } else {
+            // Show all other available units in the transfer dropdown
+            opt.hidden = false;
+            opt.style.display = '';
             opt.disabled = false;
             opt.text = baseTitle;
             opt.title = "";
@@ -3035,21 +3039,13 @@ function syncTargetUnitDropdown(selectEl, currentUnit) {
         }
     }
 
-    // Auto-select alternate enabled unit:
+    // Auto-select first non-hidden, enabled alternate unit
     let selectedIdx = -1;
-    if (curClean.includes('unit 1') || curClean === 'u1') {
-        for (let i = 0; i < selectEl.options.length; i++) {
-            if (!selectEl.options[i].disabled && (selectEl.options[i].value.toLowerCase().includes('unit 2') || selectEl.options[i].text.toLowerCase().includes('unit 2'))) {
-                selectedIdx = i;
-                break;
-            }
-        }
-    } else if (curClean.includes('unit 2') || curClean === 'u2') {
-        for (let i = 0; i < selectEl.options.length; i++) {
-            if (!selectEl.options[i].disabled && (selectEl.options[i].value.toLowerCase().includes('unit 1') || selectEl.options[i].text.toLowerCase().includes('unit 1'))) {
-                selectedIdx = i;
-                break;
-            }
+    for (let i = 0; i < selectEl.options.length; i++) {
+        const opt = selectEl.options[i];
+        if (!opt.disabled && !opt.hidden && opt.style.display !== 'none') {
+            selectedIdx = i;
+            break;
         }
     }
 

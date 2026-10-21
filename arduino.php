@@ -5,7 +5,7 @@ require_once __DIR__ . '/db.php';
 $pdo = Database::getConnection();
 $workersStmt = $pdo->query("SELECT id, unique_id, name, unit, role, total_pieces FROM workers ORDER BY name ASC");
 $allWorkers = $workersStmt->fetchAll();
-$unitsStmt = $pdo->query("SELECT * FROM production_units WHERE status = 'Active' ORDER BY id ASC");
+$unitsStmt = $pdo->query("SELECT * FROM production_units WHERE COALESCE(NULLIF(status, ''), 'Active') != 'Disabled' ORDER BY id ASC");
 $productionUnits = $unitsStmt->fetchAll(PDO::FETCH_ASSOC);
 if (empty($productionUnits)) {
     $productionUnits = [

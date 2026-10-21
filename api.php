@@ -156,13 +156,25 @@ try {
             }
             
             // Check unit against dynamic production_units table
-            $validUnits = $pdo->query("SELECT unit_name FROM production_units")->fetchAll(PDO::FETCH_COLUMN);
-            if (empty($validUnits)) {
-                $validUnits = ['Unit 1', 'Unit 2'];
+            $allUnitsRows = $pdo->query("SELECT unit_name, unit_title FROM production_units")->fetchAll(PDO::FETCH_ASSOC);
+            $matchedUnitName = null;
+            foreach ($allUnitsRows as $ur) {
+                if (strcasecmp($ur['unit_name'], $unit) === 0 || strcasecmp($ur['unit_title'], $unit) === 0) {
+                    $matchedUnitName = $ur['unit_name'];
+                    break;
+                }
             }
-            if (!in_array($unit, $validUnits)) {
-                echo json_encode(['success' => false, 'message' => 'Please select a valid Production Unit.']);
-                exit;
+            if ($matchedUnitName !== null) {
+                $unit = $matchedUnitName;
+            } else {
+                $validUnits = array_column($allUnitsRows, 'unit_name');
+                if (empty($validUnits)) {
+                    $validUnits = ['Unit 1', 'Unit 2'];
+                }
+                if (!in_array($unit, $validUnits)) {
+                    echo json_encode(['success' => false, 'message' => 'Please select a valid Production Unit.']);
+                    exit;
+                }
             }
 
             $uStatusStmt = $pdo->prepare("SELECT status FROM production_units WHERE unit_name = :u LIMIT 1");
@@ -242,17 +254,32 @@ try {
             }
 
             // Auto-generate Unique ID based on Production Unit: PU001-1, PU002-1, PU003-1...
-            if (empty($unique_id)) {
-                $prefix = 'PU001';
-                $uStmt = $pdo->prepare("SELECT unit_code FROM production_units WHERE unit_name = :unit OR unit_title = :unit LIMIT 1");
-                $uStmt->execute([':unit' => $unit]);
-                $foundCode = $uStmt->fetchColumn();
-                if ($foundCode) {
-                    $prefix = strtoupper(trim($foundCode));
-                } elseif (preg_match('/(\d+)/', $unit, $m)) {
-                    $prefix = 'PU' . sprintf('%03d', (int)$m[1]);
-                }
+            $prefix = 'PU001';
+            $uStmt = $pdo->prepare("SELECT unit_code FROM production_units WHERE unit_name = :unit OR unit_title = :unit LIMIT 1");
+            $uStmt->execute([':unit' => $unit]);
+            $foundCode = $uStmt->fetchColumn();
+            if ($foundCode) {
+                $prefix = strtoupper(trim($foundCode));
+            } elseif (preg_match('/(\d+)/', $unit, $m)) {
+                $prefix = 'PU' . sprintf('%03d', (int)$m[1]);
+            }
 
+            // Determine if regeneration is required:
+            // 1) unique_id is empty
+            // 2) or unique_id has prefix of a DIFFERENT production unit (e.g. PU001-3 when registering for Unit 3)
+            $needsRegen = empty($unique_id);
+            if (!$needsRegen) {
+                $allCodes = $pdo->query("SELECT DISTINCT unit_code FROM production_units")->fetchAll(PDO::FETCH_COLUMN);
+                foreach ($allCodes as $cd) {
+                    $cdUpper = strtoupper(trim($cd));
+                    if (!empty($cdUpper) && $cdUpper !== $prefix && stripos($unique_id, $cdUpper) === 0) {
+                        $needsRegen = true;
+                        break;
+                    }
+                }
+            }
+
+            if ($needsRegen) {
                 $stmt = $pdo->prepare("SELECT unique_id FROM workers WHERE unit = :unit OR unique_id LIKE :prefix_like");
                 $stmt->execute([':unit' => $unit, ':prefix_like' => $prefix . '%']);
                 $allIds = $stmt->fetchAll(PDO::FETCH_COLUMN);
@@ -1985,12 +2012,37 @@ try {
 
             // Auto-generate username/ID if not supplied
             if (empty($username)) {
-                $prefix = ($unit === 'Unit 2') ? 'PU002' : (($unit === 'Unit 1') ? 'PU001' : 'USR');
-                if ($role === 'supervisor') {
-                    $prefix = ($unit === 'Unit 2') ? 'UNIT2_LEAD' : (($unit === 'Unit 1') ? 'UNIT1_LEAD' : 'SUP');
+                $prefix = 'PU001';
+                $uStmt = $pdo->prepare("SELECT unit_code FROM production_units WHERE unit_name = :unit OR unit_title = :unit LIMIT 1");
+                $uStmt->execute([':unit' => $unit]);
+                $foundCode = $uStmt->fetchColumn();
+                if ($foundCode) {
+                    $prefix = strtoupper(trim($foundCode));
+                } elseif (preg_match('/(\d+)/', $unit, $m)) {
+                    $prefix = 'PU' . sprintf('%03d', (int)$m[1]);
+                } else {
+                    $prefix = ($unit === 'Unit 2') ? 'PU002' : (($unit === 'Unit 1') ? 'PU001' : 'USR');
                 }
-                $existingCount = (int)$pdo->query("SELECT COUNT(*) FROM users")->fetchColumn();
-                $username = $prefix . '-' . ($existingCount + 1);
+
+                if ($role === 'supervisor') {
+                    if (preg_match('/(\d+)/', $unit, $m)) {
+                        $prefix = 'UNIT' . (int)$m[1] . '_LEAD';
+                    } else {
+                        $prefix = 'SUP';
+                    }
+                }
+
+                $stmt = $pdo->prepare("SELECT unique_id FROM workers WHERE unit = :unit OR unique_id LIKE :prefix_like");
+                $stmt->execute([':unit' => $unit, ':prefix_like' => $prefix . '%']);
+                $allIds = $stmt->fetchAll(PDO::FETCH_COLUMN);
+                $maxNum = 0;
+                foreach ($allIds as $existingId) {
+                    if (preg_match('/^' . preg_quote($prefix, '/') . '[-_]?(\d+)$/i', trim($existingId), $m)) {
+                        $num = (int)$m[1];
+                        if ($num > $maxNum) $maxNum = $num;
+                    }
+                }
+                $username = $prefix . '-' . ($maxNum + 1);
             }
 
             // Check if username already exists

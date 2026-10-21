@@ -84,11 +84,26 @@ function initRegistrationForm() {
         }
     }
 
-    // Switch ID prefix & next sequential number whenever user selects Unit 1 or Unit 2
+    // Switch ID prefix & next sequential number whenever user selects any unit
     const unitRadios = form.querySelectorAll('input[name="unit"]');
     unitRadios.forEach(radio => {
         radio.addEventListener('change', () => {
             updateNextWorkerId();
+        });
+    });
+
+    // Also support clicking anywhere on the card option to check radio and update ID
+    const unitCards = form.querySelectorAll('.unit-card-option');
+    unitCards.forEach(card => {
+        card.addEventListener('click', function() {
+            const radio = card.querySelector('input[name="unit"]');
+            if (radio && !radio.disabled) {
+                if (!radio.checked) {
+                    radio.checked = true;
+                    radio.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+                updateNextWorkerId();
+            }
         });
     });
 

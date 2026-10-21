@@ -289,7 +289,7 @@ if (!in_array($thisYearStr, $availableYears)) {
 }
 
 // Available production units for filter dropdown
-$unitsStmt = $pdo->query("SELECT * FROM production_units WHERE status = 'Active' ORDER BY id ASC");
+$unitsStmt = $pdo->query("SELECT * FROM production_units WHERE COALESCE(NULLIF(status, ''), 'Active') != 'Disabled' ORDER BY id ASC");
 $productionUnits = $unitsStmt->fetchAll(PDO::FETCH_ASSOC);
 
 // =========================================================================

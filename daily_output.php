@@ -9,7 +9,7 @@ $currentUser = getCurrentUser();
 $stitchingCooldownSeconds = (int)Database::getSetting('stitching_cooldown_seconds', 30);
 
 // Fetch all registered production units
-$unitsStmt = $pdo->query("SELECT * FROM production_units WHERE status = 'Active' ORDER BY id ASC");
+$unitsStmt = $pdo->query("SELECT * FROM production_units WHERE COALESCE(NULLIF(status, ''), 'Active') != 'Disabled' ORDER BY id ASC");
 $productionUnits = $unitsStmt->fetchAll(PDO::FETCH_ASSOC);
 if (empty($productionUnits)) {
     $productionUnits = [
