@@ -129,6 +129,7 @@ class Database {
         CREATE TABLE IF NOT EXISTS piece_logs (
             id INT AUTO_INCREMENT PRIMARY KEY,
             worker_id INT NOT NULL,
+            unit VARCHAR(50) DEFAULT 'Unit 1',
             material_name VARCHAR(200) NOT NULL,
             piece_count INT NOT NULL,
             work_date DATE NOT NULL,
@@ -136,12 +137,20 @@ class Database {
             notes TEXT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             INDEX idx_worker_id (worker_id),
+            INDEX idx_unit (unit),
             INDEX idx_material (material_name),
             INDEX idx_work_date (work_date),
             FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ";
         self::$pdo->exec($sqlLogs);
+
+        try {
+            self::$pdo->exec("ALTER TABLE piece_logs ADD COLUMN unit VARCHAR(50) DEFAULT 'Unit 1' AFTER worker_id");
+        } catch (Exception $e) {}
+        try {
+            self::$pdo->exec("ALTER TABLE piece_logs ADD INDEX idx_unit (unit)");
+        } catch (Exception $e) {}
 
         // Table: users (Authentication & Roles)
         $sqlUsers = "
@@ -152,10 +161,15 @@ class Database {
             full_name VARCHAR(100) NOT NULL,
             role ENUM('admin', 'supervisor', 'operator') NOT NULL DEFAULT 'admin',
             unit VARCHAR(50) DEFAULT 'All',
+            status VARCHAR(20) NOT NULL DEFAULT 'Active',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ";
         self::$pdo->exec($sqlUsers);
+
+        try {
+            self::$pdo->exec("ALTER TABLE users ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'Active' AFTER unit");
+        } catch (Exception $e) {}
 
         // Table: garment_categories (Admin-managed Category, Subcategory, Sub-Subcategory)
         $sqlCategories = "

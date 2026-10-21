@@ -110,32 +110,42 @@ $todayPieces = array_sum(array_column($todayLogs, 'piece_count'));
 $todayMaterials = count(array_unique(array_column($todayLogs, 'material_name')));
 
 // Lifetime material summary with multi-unit support
-$allMatStmt = $pdo->prepare("
-    SELECT material_name, 
-           SUM(piece_count) as total, 
-           SUM(CASE WHEN LOWER(COALESCE(unit, '')) LIKE '%unit 1%' OR unit = '1' THEN piece_count ELSE 0 END) as unit1_total,
-           SUM(CASE WHEN LOWER(COALESCE(unit, '')) LIKE '%unit 2%' OR unit = '2' THEN piece_count ELSE 0 END) as unit2_total,
-           GROUP_CONCAT(DISTINCT COALESCE(unit, '')) as units_stitched,
-           COUNT(*) as entries 
-    FROM piece_logs 
-    WHERE worker_id = :worker_id 
-    GROUP BY material_name 
-    ORDER BY total DESC
-");
-$allMatStmt->execute([':worker_id' => $selectedWorkerId]);
-$allMaterials = $allMatStmt->fetchAll(PDO::FETCH_ASSOC);
+$allMaterials = [];
+try {
+    $allMatStmt = $pdo->prepare("
+        SELECT material_name, 
+               SUM(piece_count) as total, 
+               SUM(CASE WHEN LOWER(COALESCE(unit, '')) LIKE '%unit 1%' OR unit = '1' THEN piece_count ELSE 0 END) as unit1_total,
+               SUM(CASE WHEN LOWER(COALESCE(unit, '')) LIKE '%unit 2%' OR unit = '2' THEN piece_count ELSE 0 END) as unit2_total,
+               GROUP_CONCAT(DISTINCT COALESCE(unit, '')) as units_stitched,
+               COUNT(*) as entries 
+        FROM piece_logs 
+        WHERE worker_id = :worker_id 
+        GROUP BY material_name 
+        ORDER BY total DESC
+    ");
+    $allMatStmt->execute([':worker_id' => $selectedWorkerId]);
+    $allMaterials = $allMatStmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $allMaterials = [];
+}
 
 // Lifetime unit piece totals for this worker
-$unitTotalsStmt = $pdo->prepare("
-    SELECT 
-        COALESCE(NULLIF(TRIM(unit), ''), 'Unit 1') as unit_name,
-        SUM(piece_count) as unit_pieces
-    FROM piece_logs
-    WHERE worker_id = :worker_id
-    GROUP BY COALESCE(NULLIF(TRIM(unit), ''), 'Unit 1')
-");
-$unitTotalsStmt->execute([':worker_id' => $selectedWorkerId]);
-$workerUnitTotals = $unitTotalsStmt->fetchAll(PDO::FETCH_ASSOC);
+$workerUnitTotals = [];
+try {
+    $unitTotalsStmt = $pdo->prepare("
+        SELECT 
+            COALESCE(NULLIF(TRIM(unit), ''), 'Unit 1') as unit_name,
+            SUM(piece_count) as unit_pieces
+        FROM piece_logs
+        WHERE worker_id = :worker_id
+        GROUP BY COALESCE(NULLIF(TRIM(unit), ''), 'Unit 1')
+    ");
+    $unitTotalsStmt->execute([':worker_id' => $selectedWorkerId]);
+    $workerUnitTotals = $unitTotalsStmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $workerUnitTotals = [];
+}
 
 $u1Lifetime = 0;
 $u2Lifetime = 0;

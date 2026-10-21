@@ -44,7 +44,7 @@ $usersQuery = "
         w.experience_years,
         w.extra_skills,
         w.total_pieces,
-        COALESCE(w.status, u.status, 'Active') AS worker_status,
+        COALESCE(w.status, 'Active') AS worker_status,
         (SELECT COUNT(*) FROM piece_logs WHERE worker_id = w.id) AS log_count,
         (SELECT MAX(work_date) FROM piece_logs WHERE worker_id = w.id) AS last_active_date
     FROM users u
@@ -59,18 +59,23 @@ $usersStmt = $pdo->query($usersQuery);
 $allUsers = $usersStmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Fetch all worker category stitching statistics for instant breakdown loading
-$workerCategoryLogs = $pdo->query("
-    SELECT 
-        worker_id,
-        material_name,
-        GROUP_CONCAT(DISTINCT COALESCE(unit, '')) as units_stitched,
-        SUM(piece_count) as total_pieces,
-        COUNT(*) as log_count,
-        MAX(work_date) as last_date
-    FROM piece_logs
-    GROUP BY worker_id, material_name
-    ORDER BY worker_id ASC, total_pieces DESC
-")->fetchAll(PDO::FETCH_ASSOC);
+$workerCategoryLogs = [];
+try {
+    $workerCategoryLogs = $pdo->query("
+        SELECT 
+            worker_id,
+            material_name,
+            GROUP_CONCAT(DISTINCT COALESCE(unit, '')) as units_stitched,
+            SUM(piece_count) as total_pieces,
+            COUNT(*) as log_count,
+            MAX(work_date) as last_date
+        FROM piece_logs
+        GROUP BY worker_id, material_name
+        ORDER BY worker_id ASC, total_pieces DESC
+    ")->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $workerCategoryLogs = [];
+}
 
 $workerCategoryMap = [];
 foreach ($workerCategoryLogs as $clog) {
@@ -89,16 +94,21 @@ foreach ($workerCategoryLogs as $clog) {
 }
 
 // Fetch all worker unit-wise stitching statistics for instant unit summary breakdown
-$workerUnitLogs = $pdo->query("
-    SELECT 
-        worker_id,
-        COALESCE(NULLIF(TRIM(unit), ''), 'Unit 1') as unit_name,
-        SUM(piece_count) as total_pieces,
-        COUNT(*) as log_count
-    FROM piece_logs
-    GROUP BY worker_id, COALESCE(NULLIF(TRIM(unit), ''), 'Unit 1')
-    ORDER BY worker_id ASC, total_pieces DESC
-")->fetchAll(PDO::FETCH_ASSOC);
+$workerUnitLogs = [];
+try {
+    $workerUnitLogs = $pdo->query("
+        SELECT 
+            worker_id,
+            COALESCE(NULLIF(TRIM(unit), ''), 'Unit 1') as unit_name,
+            SUM(piece_count) as total_pieces,
+            COUNT(*) as log_count
+        FROM piece_logs
+        GROUP BY worker_id, COALESCE(NULLIF(TRIM(unit), ''), 'Unit 1')
+        ORDER BY worker_id ASC, total_pieces DESC
+    ")->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $workerUnitLogs = [];
+}
 
 $workerUnitMap = [];
 foreach ($workerUnitLogs as $ulog) {
