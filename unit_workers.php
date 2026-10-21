@@ -88,6 +88,39 @@ $workersStmt = $pdo->prepare("
 $workersStmt->execute([':unit' => $requestedUnit]);
 $workersList = $workersStmt->fetchAll();
 
+// Map unit codes for transfer detection
+$unitsLookup = [];
+foreach ($productionUnits as $pu) {
+    if (!empty($pu['unit_code']) && !empty($pu['unit_name'])) {
+        $unitsLookup[strtoupper($pu['unit_code'])] = $pu['unit_name'];
+    }
+}
+$unitsLookup['PU001'] = 'Unit 1';
+$unitsLookup['PU002'] = 'Unit 2';
+
+foreach ($workersList as &$w) {
+    $w['is_switched'] = false;
+    $transFrom = !empty($w['transferred_from']) ? trim($w['transferred_from']) : '';
+    $w['transfer_type'] = !empty($w['transfer_type']) ? trim($w['transfer_type']) : 'Emergency Support';
+
+    if (!empty($transFrom) && strcasecmp($transFrom, $w['unit']) !== 0) {
+        $w['is_switched'] = true;
+        $w['transferred_from'] = $transFrom;
+    } elseif (!empty($w['unique_id'])) {
+        $uidUpper = strtoupper($w['unique_id']);
+        foreach ($unitsLookup as $code => $uName) {
+            if (!empty($code) && strpos($uidUpper, $code) === 0) {
+                if (strcasecmp($uName, $w['unit']) !== 0) {
+                    $w['is_switched'] = true;
+                    $w['transferred_from'] = $uName;
+                }
+                break;
+            }
+        }
+    }
+}
+unset($w);
+
 include __DIR__ . '/includes/header.php';
 ?>
 
@@ -263,7 +296,14 @@ include __DIR__ . '/includes/header.php';
                                         <a href="javascript:void(0)" onclick="openWorkerModal(<?= $w['id'] ?>)" class="worker-meta-name" style="text-decoration:none;">
                                             <?= htmlspecialchars($w['name']) ?>
                                         </a>
-                                        <span class="worker-meta-sub text-cyan font-bold"><?= htmlspecialchars($w['unique_id']) ?></span>
+                                        <div style="display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; margin-top: 0.15rem;">
+                                            <span class="worker-meta-sub text-cyan font-bold"><?= htmlspecialchars($w['unique_id']) ?></span>
+                                            <?php if (!empty($w['is_switched']) && !empty($w['transferred_from'])): ?>
+                                                <span class="badge-pill" style="font-size: 0.65rem; padding: 0.08rem 0.38rem; background: rgba(245, 158, 11, 0.14); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 9999px; display: inline-flex; align-items: center; gap: 0.2rem;" title="Switched from <?= htmlspecialchars($w['transferred_from']) ?> (<?= htmlspecialchars($w['transfer_type'] ?? 'Emergency Support') ?>)">
+                                                    <i class="fa-solid fa-arrow-right-arrow-left" style="font-size: 0.55rem;"></i> Switched from <?= htmlspecialchars($w['transferred_from']) ?>
+                                                </span>
+                                            <?php endif; ?>
+                                        </div>
                                     </div>
                                 </div>
                             </td>

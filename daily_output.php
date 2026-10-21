@@ -77,6 +77,27 @@ if ($selectedWorkerId > 0) {
     $worker = null;
 }
 
+$workerTransferredFrom = '';
+$workerTransferType = '';
+if ($worker) {
+    $workerTransferredFrom = trim($worker['transferred_from'] ?? '');
+    $workerTransferType = trim($worker['transfer_type'] ?? 'temporary');
+    if (empty($workerTransferredFrom) && !empty($worker['unique_id'])) {
+        if (preg_match('/^(PU\d{3})/i', $worker['unique_id'], $m)) {
+            $code = strtoupper($m[1]);
+            foreach ($productionUnits as $pu) {
+                if (strtoupper($pu['unit_code']) === $code) {
+                    $orig = $pu['unit_name'];
+                    if (strcasecmp(preg_replace('/[^a-z0-9]/', '', $orig), preg_replace('/[^a-z0-9]/', '', $worker['unit'])) !== 0) {
+                        $workerTransferredFrom = $orig;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
+
 if (empty($activeUnit)) {
     $activeUnit = 'all';
 }
@@ -760,6 +781,11 @@ function filterWorkersByUnit(unitName) {
                     <span class="unit-badge <?= ($worker['unit'] === 'Unit 1') ? 'unit-1' : 'unit-2' ?>" style="font-size: 0.72rem; padding: 0.15rem 0.45rem;">
                         <?= htmlspecialchars($worker['unit']) ?>
                     </span>
+                    <?php if (!empty($workerTransferredFrom)): ?>
+                        <span class="badge-pill" style="font-size: 0.7rem; padding: 0.12rem 0.5rem; background: rgba(245, 158, 11, 0.18); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.45); font-weight: 700; display: inline-flex; align-items: center; gap: 0.25rem;" title="Transferred from <?= htmlspecialchars($workerTransferredFrom) ?> (<?= ($workerTransferType === 'permanent') ? 'Permanent Transfer' : 'Emergency Support' ?>)">
+                            <i class="fa-solid fa-arrow-right-arrow-left"></i> Switched from <?= htmlspecialchars($workerTransferredFrom) ?>
+                        </span>
+                    <?php endif; ?>
                     <span class="text-cyan font-bold" style="font-size: 0.82rem;"><?= htmlspecialchars($worker['unique_id']) ?></span>
                 </div>
                 <div class="uf-sub-row">
@@ -1510,10 +1536,15 @@ document.addEventListener('DOMContentLoaded', () => {
                                             <div style="font-weight: 700; font-size: 0.98rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: ${isCurrentUser ? 'var(--accent-cyan)' : 'var(--text-primary)'};">
                                                 ${escapeHtml(w.name)}
                                             </div>
-                                            <div style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; color: var(--text-muted);">
-                                                <span class="badge-pill" style="font-size: 0.68rem; padding: 0.15rem 0.45rem; background: ${w.unit === 'Unit 1' ? 'var(--unit1-bg)' : 'var(--unit2-bg)'}; color: ${w.unit === 'Unit 1' ? 'var(--unit1-color)' : 'var(--unit2-color)'};">
-                                                    ${escapeHtml(w.unit)}
+                                            <div style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; color: var(--text-muted); flex-wrap: wrap;">
+                                                <span class="badge-pill" style="font-size: 0.68rem; padding: 0.15rem 0.45rem; background: ${w.unit === 'Unit 1' ? 'var(--unit1-bg)' : 'var(--unit2-bg)'}; color: ${w.unit === 'Unit 1' ? 'var(--unit1-color)' : 'var(--unit2-color)'}; font-weight: 700;">
+                                                    <i class="fa-solid fa-building" style="font-size: 0.6rem;"></i> ${escapeHtml(w.unit)}
                                                 </span>
+                                                ${w.is_switched && w.transferred_from ? `
+                                                    <span class="badge-pill" style="font-size: 0.65rem; padding: 0.1rem 0.4rem; background: rgba(245, 158, 11, 0.16); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); font-weight: 700; display: inline-flex; align-items: center; gap: 0.2rem;" title="Switched from ${escapeHtml(w.transferred_from)}">
+                                                        <i class="fa-solid fa-arrow-right-arrow-left" style="font-size: 0.55rem;"></i> Switched from ${escapeHtml(w.transferred_from)}
+                                                    </span>
+                                                ` : ''}
                                                 <span>• ${escapeHtml(w.role || 'Tailor')}</span>
                                             </div>
                                         </div>
@@ -1582,14 +1613,28 @@ document.addEventListener('DOMContentLoaded', () => {
                                             <div style="font-weight: 700; color: ${isCurrentUser ? 'var(--accent-cyan)' : 'var(--text-primary)'};">
                                                 ${escapeHtml(w.name)}
                                             </div>
-                                            <div class="text-muted" style="font-size: 0.75rem;">${escapeHtml(w.unique_id || '')}</div>
+                                            <div style="display: flex; align-items: center; gap: 0.35rem; margin-top: 0.15rem; flex-wrap: wrap;">
+                                                <span class="text-muted" style="font-size: 0.75rem; font-family: monospace;">${escapeHtml(w.unique_id || '')}</span>
+                                                ${w.is_switched && w.transferred_from ? `
+                                                    <span style="font-size: 0.65rem; font-weight: 700; color: #fbbf24; background: rgba(245, 158, 11, 0.12); padding: 0.05rem 0.35rem; border-radius: 4px; border: 1px solid rgba(245, 158, 11, 0.3); display: inline-flex; align-items: center; gap: 0.2rem;">
+                                                        <i class="fa-solid fa-bolt" style="font-size: 0.55rem;"></i> Emergency Support
+                                                    </span>
+                                                ` : ''}
+                                            </div>
                                         </div>
                                     </div>
                                 </td>
                                 <td>
-                                    <span class="badge-pill" style="font-size: 0.78rem; background: ${w.unit === 'Unit 1' ? 'var(--unit1-bg)' : 'var(--unit2-bg)'}; color: ${w.unit === 'Unit 1' ? 'var(--unit1-color)' : 'var(--unit2-color)'};">
-                                        ${escapeHtml(w.unit)}
-                                    </span>
+                                    <div style="display: flex; flex-direction: column; gap: 0.25rem; align-items: flex-start;">
+                                        <span class="badge-pill" style="font-size: 0.78rem; background: ${w.unit === 'Unit 1' ? 'var(--unit1-bg)' : 'var(--unit2-bg)'}; color: ${w.unit === 'Unit 1' ? 'var(--unit1-color)' : 'var(--unit2-color)'}; font-weight: 700;">
+                                            <i class="fa-solid fa-building" style="font-size: 0.7rem;"></i> ${escapeHtml(w.unit)}
+                                        </span>
+                                        ${w.is_switched && w.transferred_from ? `
+                                            <span class="badge-pill" style="font-size: 0.68rem; padding: 0.12rem 0.45rem; background: rgba(245, 158, 11, 0.16); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); font-weight: 700; display: inline-flex; align-items: center; gap: 0.25rem;" title="Switched from ${escapeHtml(w.transferred_from)} (${escapeHtml(w.transfer_type === 'permanent' ? 'Permanent Transfer' : 'Emergency Support')})">
+                                                <i class="fa-solid fa-arrow-right-arrow-left" style="font-size: 0.6rem;"></i> Switched from ${escapeHtml(w.transferred_from)}
+                                            </span>
+                                        ` : ''}
+                                    </div>
                                 </td>
                                 <td>
                                     <span class="text-muted" style="font-size: 0.82rem;">${escapeHtml(w.role || 'Tailor')}</span>

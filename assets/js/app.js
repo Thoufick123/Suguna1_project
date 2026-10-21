@@ -1035,7 +1035,14 @@ function initLeaderboardPage() {
                         </div>
                     </td>
                     <td>
-                        <span class="unit-badge ${unitClass}">${escapeHtml(w.unit)}</span>
+                        <div style="display: flex; flex-direction: column; gap: 0.2rem; align-items: flex-start;">
+                            <span class="unit-badge ${unitClass}">${escapeHtml(w.unit)}</span>
+                            ${w.is_switched && w.transferred_from ? `
+                                <span class="badge-pill" style="font-size: 0.68rem; padding: 0.1rem 0.4rem; background: rgba(245, 158, 11, 0.16); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); font-weight: 700; display: inline-flex; align-items: center; gap: 0.2rem;" title="Switched from ${escapeHtml(w.transferred_from)}">
+                                    <i class="fa-solid fa-arrow-right-arrow-left" style="font-size: 0.55rem;"></i> Switched from ${escapeHtml(w.transferred_from)}
+                                </span>
+                            ` : ''}
+                        </div>
                     </td>
                     <td>
                         <strong>${w.experience_years}</strong> yrs

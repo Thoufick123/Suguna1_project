@@ -662,11 +662,41 @@ try {
             $stmt->execute($params);
             $workers = $stmt->fetchAll();
 
+            // Fetch production units code map for derivation
+            $unitsMap = [];
+            try {
+                $pUnits = $pdo->query("SELECT unit_name, unit_code FROM production_units")->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($pUnits as $pu) {
+                    $unitsMap[strtoupper($pu['unit_code'])] = $pu['unit_name'];
+                }
+            } catch (Exception $e) {}
+
+            $deriveSwitched = function(&$w) use ($unitsMap) {
+                $transFrom = trim($w['transferred_from'] ?? '');
+                if (empty($transFrom)) {
+                    if (preg_match('/^(PU\d{3})/i', $w['unique_id'] ?? '', $m)) {
+                        $code = strtoupper($m[1]);
+                        if (isset($unitsMap[$code])) {
+                            $orig = $unitsMap[$code];
+                            $origNorm = preg_replace('/[^a-z0-9]/', '', strtolower($orig));
+                            $currNorm = preg_replace('/[^a-z0-9]/', '', strtolower($w['unit'] ?? ''));
+                            if ($origNorm !== $currNorm) {
+                                $transFrom = $orig;
+                            }
+                        }
+                    }
+                }
+                $w['is_switched'] = !empty($transFrom);
+                $w['transferred_from'] = $transFrom;
+                $w['transfer_type'] = $w['transfer_type'] ?? ($w['is_switched'] ? 'temporary' : '');
+            };
+
             // Add ranks
             $rank = 1;
             foreach ($workers as &$w) {
                 $w['rank'] = $rank++;
                 $w['filtered_material'] = $material;
+                $deriveSwitched($w);
             }
 
             echo json_encode([
@@ -717,12 +747,7 @@ try {
 
             $sql = "
                 SELECT 
-                    w.id,
-                    w.unique_id,
-                    w.name,
-                    w.unit,
-                    w.role,
-                    w.experience_years,
+                    w.*,
                     COALESCE(SUM(pl.piece_count), 0) as category_pieces,
                     COUNT(pl.id) as batch_count,
                     MAX(pl.created_at) as last_stitch_time
@@ -748,6 +773,7 @@ try {
                 if ($w['category_pieces'] > 0) {
                     $activeParticipants++;
                 }
+                $deriveSwitched($w);
             }
 
             echo json_encode([
@@ -2169,12 +2195,22 @@ try {
 
             // 1. Update workers table
             if ($workerId > 0) {
-                $updW = $pdo->prepare("UPDATE workers SET unit = :unit, updated_at = CURRENT_TIMESTAMP WHERE id = :id");
-                $updW->execute([':unit' => $canonicalUnit, ':id' => $workerId]);
+                try {
+                    $updW = $pdo->prepare("UPDATE workers SET unit = :unit, origin_unit = COALESCE(NULLIF(origin_unit, ''), :old_unit), transferred_from = :from_unit, transfer_type = :ttype, updated_at = CURRENT_TIMESTAMP WHERE id = :id");
+                    $updW->execute([':unit' => $canonicalUnit, ':old_unit' => $oldUnit, ':from_unit' => $oldUnit, ':ttype' => $transferType, ':id' => $workerId]);
+                } catch (Exception $e) {
+                    $updW = $pdo->prepare("UPDATE workers SET unit = :unit, updated_at = CURRENT_TIMESTAMP WHERE id = :id");
+                    $updW->execute([':unit' => $canonicalUnit, ':id' => $workerId]);
+                }
             }
             if (!empty($username)) {
-                $updW2 = $pdo->prepare("UPDATE workers SET unit = :unit, updated_at = CURRENT_TIMESTAMP WHERE LOWER(unique_id) = LOWER(:u)");
-                $updW2->execute([':unit' => $canonicalUnit, ':u' => $username]);
+                try {
+                    $updW2 = $pdo->prepare("UPDATE workers SET unit = :unit, origin_unit = COALESCE(NULLIF(origin_unit, ''), :old_unit), transferred_from = :from_unit, transfer_type = :ttype, updated_at = CURRENT_TIMESTAMP WHERE LOWER(unique_id) = LOWER(:u)");
+                    $updW2->execute([':unit' => $canonicalUnit, ':old_unit' => $oldUnit, ':from_unit' => $oldUnit, ':ttype' => $transferType, ':u' => $username]);
+                } catch (Exception $e) {
+                    $updW2 = $pdo->prepare("UPDATE workers SET unit = :unit, updated_at = CURRENT_TIMESTAMP WHERE LOWER(unique_id) = LOWER(:u)");
+                    $updW2->execute([':unit' => $canonicalUnit, ':u' => $username]);
+                }
 
                 // 2. Update users table
                 $updU = $pdo->prepare("UPDATE users SET unit = :unit WHERE LOWER(username) = LOWER(:u)");

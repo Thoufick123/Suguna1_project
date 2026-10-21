@@ -33,6 +33,24 @@ function resolveUnitBadgeColor($u) {
     return 'emerald';
 }
 
+// Map unit codes for transfer detection
+$unitsLookup = [];
+foreach ($productionUnits as $pu) {
+    if (!empty($pu['unit_code']) && !empty($pu['unit_name'])) {
+        $unitsLookup[strtoupper($pu['unit_code'])] = $pu['unit_name'];
+    }
+}
+$unitsLookup['PU001'] = 'Unit 1';
+$unitsLookup['PU002'] = 'Unit 2';
+
+$hasTransferCols = false;
+try {
+    $pdo->query("SELECT transferred_from FROM workers LIMIT 1");
+    $hasTransferCols = true;
+} catch (Exception $e) {}
+
+$transferSelect = $hasTransferCols ? "w.origin_unit, w.transferred_from, w.transfer_type," : "'' AS origin_unit, '' AS transferred_from, '' AS transfer_type,";
+
 // Fetch all registered users with linked worker profile data
 $usersQuery = "
     SELECT 
@@ -46,6 +64,7 @@ $usersQuery = "
         w.unique_id,
         w.name AS worker_name,
         w.unit AS worker_unit,
+        {$transferSelect}
         w.age,
         w.mobile_num,
         w.alt_mobile_num,
@@ -67,6 +86,31 @@ $usersQuery = "
 ";
 $usersStmt = $pdo->query($usersQuery);
 $allUsers = $usersStmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Precompute dynamic transfer/switched origin for all workers
+foreach ($allUsers as &$u) {
+    $u['is_switched'] = false;
+    $transFrom = !empty($u['transferred_from']) ? trim($u['transferred_from']) : '';
+    $u['transfer_type'] = !empty($u['transfer_type']) ? trim($u['transfer_type']) : 'Emergency Support';
+    $currentUnit = !empty($u['worker_unit']) ? $u['worker_unit'] : (!empty($u['user_unit']) ? $u['user_unit'] : '');
+
+    if (!empty($transFrom) && strcasecmp($transFrom, $currentUnit) !== 0) {
+        $u['is_switched'] = true;
+        $u['transferred_from'] = $transFrom;
+    } elseif (!empty($u['unique_id']) && !empty($currentUnit)) {
+        $uidUpper = strtoupper($u['unique_id']);
+        foreach ($unitsLookup as $code => $uName) {
+            if (!empty($code) && strpos($uidUpper, $code) === 0) {
+                if (strcasecmp($uName, $currentUnit) !== 0) {
+                    $u['is_switched'] = true;
+                    $u['transferred_from'] = $uName;
+                }
+                break;
+            }
+        }
+    }
+}
+unset($u);
 
 // Fetch all worker category stitching statistics for instant breakdown loading
 $workerCategoryLogs = [];
@@ -841,6 +885,9 @@ include __DIR__ . '/includes/header.php';
                             'pieces' => number_format($pieces),
                             'status' => $isActive ? 'Active' : 'Inactive',
                             'created_at' => !empty($user['user_created_at']) ? date('M d, Y', strtotime($user['user_created_at'])) : 'Recent',
+                            'is_switched' => !empty($user['is_switched']),
+                            'transferred_from' => $user['transferred_from'] ?? '',
+                            'transfer_type' => $user['transfer_type'] ?? 'Emergency Support',
                             'categories' => (!empty($workerId) && isset($workerCategoryMap[$workerId])) ? $workerCategoryMap[$workerId] : [],
                             'unit_breakdown' => (!empty($workerId) && isset($workerUnitMap[$workerId])) ? $workerUnitMap[$workerId] : [],
                             'is_admin' => $isRootAdmin
@@ -902,17 +949,26 @@ include __DIR__ . '/includes/header.php';
 
                         <!-- 4. Production Unit -->
                         <td>
-                            <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
-                                <span class="badge-pill unit-<?= $uColor ?>-pill" id="tableUnitBadge_<?= $userId ?>_<?= $workerId ?>" style="font-size: 0.75rem;">
-                                    <i class="fa-solid fa-building"></i> <?= htmlspecialchars($unitVal) ?>
-                                </span>
-                                <?php if ($currentUser && in_array($currentUser['role'], ['admin', 'supervisor']) && !$isRootAdmin): ?>
-                                    <button type="button" class="btn-unit-transfer-quick" 
-                                        onclick="quickTransferUserUnit(<?= htmlspecialchars(json_encode($userRecordJson), ENT_QUOTES, 'UTF-8') ?>)" 
-                                        title="Transfer user between production units (Emergency Support or Permanent Assignment)">
-                                        <i class="fa-solid fa-arrow-right-arrow-left"></i>
-                                    </button>
-                                <?php endif; ?>
+                            <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                                <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
+                                    <span class="badge-pill unit-<?= $uColor ?>-pill" id="tableUnitBadge_<?= $userId ?>_<?= $workerId ?>" style="font-size: 0.75rem;">
+                                        <i class="fa-solid fa-building"></i> <?= htmlspecialchars($unitVal) ?>
+                                    </span>
+                                    <?php if ($currentUser && in_array($currentUser['role'], ['admin', 'supervisor']) && !$isRootAdmin): ?>
+                                        <button type="button" class="btn-unit-transfer-quick" 
+                                            onclick="quickTransferUserUnit(<?= htmlspecialchars(json_encode($userRecordJson), ENT_QUOTES, 'UTF-8') ?>)" 
+                                            title="Transfer user between production units (Emergency Support or Permanent Assignment)">
+                                            <i class="fa-solid fa-arrow-right-arrow-left"></i>
+                                        </button>
+                                    <?php endif; ?>
+                                </div>
+                                <div id="tableSwitchedContainer_<?= $userId ?>_<?= $workerId ?>">
+                                    <?php if (!empty($user['is_switched']) && !empty($user['transferred_from'])): ?>
+                                        <span class="badge-pill" style="font-size: 0.68rem; padding: 0.12rem 0.45rem; background: rgba(245, 158, 11, 0.14); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 9999px; width: fit-content; display: inline-flex; align-items: center; gap: 0.25rem;" title="Switched from <?= htmlspecialchars($user['transferred_from']) ?> (<?= htmlspecialchars($user['transfer_type'] ?? 'Emergency Support') ?>)">
+                                            <i class="fa-solid fa-arrow-right-arrow-left" style="font-size: 0.6rem;"></i> Switched from <?= htmlspecialchars($user['transferred_from']) ?>
+                                        </span>
+                                    <?php endif; ?>
+                                </div>
                             </div>
                         </td>
 
@@ -1011,6 +1067,9 @@ include __DIR__ . '/includes/header.php';
                 'pieces' => number_format($pieces),
                 'status' => $isActive ? 'Active' : 'Inactive',
                 'created_at' => !empty($user['user_created_at']) ? date('M d, Y', strtotime($user['user_created_at'])) : 'Recent',
+                'is_switched' => !empty($user['is_switched']),
+                'transferred_from' => $user['transferred_from'] ?? '',
+                'transfer_type' => $user['transfer_type'] ?? 'Emergency Support',
                 'categories' => (!empty($workerId) && isset($workerCategoryMap[$workerId])) ? $workerCategoryMap[$workerId] : [],
                 'unit_breakdown' => (!empty($workerId) && isset($workerUnitMap[$workerId])) ? $workerUnitMap[$workerId] : [],
                 'is_admin' => $isRootAdmin
@@ -1057,15 +1116,24 @@ include __DIR__ . '/includes/header.php';
                 </div>
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <span class="text-muted"><i class="fa-solid fa-building" style="font-size: 0.7rem;"></i> Unit:</span>
-                    <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
-                        <span class="badge-pill unit-<?= $uColor ?>-pill" id="cardUnitBadge_<?= $userId ?>_<?= $workerId ?>" style="font-size: 0.72rem;"><?= htmlspecialchars($unitVal) ?></span>
-                        <?php if ($currentUser && in_array($currentUser['role'], ['admin', 'supervisor']) && !$isRootAdmin): ?>
-                            <button type="button" class="btn-unit-transfer-quick" 
-                                onclick="quickTransferUserUnit(<?= htmlspecialchars(json_encode($userRecordJson), ENT_QUOTES, 'UTF-8') ?>)" 
-                                title="Transfer user between production units (Emergency Support or Permanent Assignment)">
-                                <i class="fa-solid fa-arrow-right-arrow-left"></i>
-                            </button>
-                        <?php endif; ?>
+                    <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.25rem;">
+                        <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
+                            <span class="badge-pill unit-<?= $uColor ?>-pill" id="cardUnitBadge_<?= $userId ?>_<?= $workerId ?>" style="font-size: 0.72rem;"><?= htmlspecialchars($unitVal) ?></span>
+                            <?php if ($currentUser && in_array($currentUser['role'], ['admin', 'supervisor']) && !$isRootAdmin): ?>
+                                <button type="button" class="btn-unit-transfer-quick" 
+                                    onclick="quickTransferUserUnit(<?= htmlspecialchars(json_encode($userRecordJson), ENT_QUOTES, 'UTF-8') ?>)" 
+                                    title="Transfer user between production units (Emergency Support or Permanent Assignment)">
+                                    <i class="fa-solid fa-arrow-right-arrow-left"></i>
+                                </button>
+                            <?php endif; ?>
+                        </div>
+                        <div id="cardSwitchedContainer_<?= $userId ?>_<?= $workerId ?>">
+                            <?php if (!empty($user['is_switched']) && !empty($user['transferred_from'])): ?>
+                                <span class="badge-pill" style="font-size: 0.65rem; padding: 0.1rem 0.38rem; background: rgba(245, 158, 11, 0.14); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 9999px; display: inline-flex; align-items: center; gap: 0.2rem;" title="Switched from <?= htmlspecialchars($user['transferred_from']) ?>">
+                                    <i class="fa-solid fa-arrow-right-arrow-left" style="font-size: 0.55rem;"></i> Switched: <?= htmlspecialchars($user['transferred_from']) ?>
+                                </span>
+                            <?php endif; ?>
+                        </div>
                     </div>
                 </div>
                 <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -1146,9 +1214,12 @@ include __DIR__ . '/includes/header.php';
                 </div>
                 <div>
                     <h3 id="detailModalName" style="margin: 0; font-size: 1.1rem; font-weight: 700; color: #fff;">User Name</h3>
-                    <div style="display: flex; align-items: center; gap: 0.45rem; margin-top: 0.2rem;">
+                    <div style="display: flex; align-items: center; gap: 0.45rem; margin-top: 0.2rem; flex-wrap: wrap;">
                         <span id="detailModalUsername" style="font-family: monospace; font-size: 0.78rem; color: var(--accent-cyan);">@username</span>
                         <span id="detailModalUnitBadge" class="badge-pill unit-cyan-pill" style="font-size: 0.68rem;">Unit</span>
+                        <span id="detailModalSwitchedBadge" class="badge-pill" style="display: none; font-size: 0.68rem; padding: 0.1rem 0.45rem; background: rgba(245, 158, 11, 0.16); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); align-items: center; gap: 0.25rem;">
+                            <i class="fa-solid fa-arrow-right-arrow-left" style="font-size: 0.6rem;"></i> <span id="detailModalSwitchedText">Switched</span>
+                        </span>
                         <span id="detailModalStatusBadge" class="status-pill status-active" style="font-size: 0.68rem; padding: 0.1rem 0.45rem;">
                             <span class="status-indicator-dot"></span> <span id="detailModalStatusText">Active</span>
                         </span>
@@ -2338,8 +2409,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (data.success) {
                     if (currentQuickTransferUserData) {
                         currentQuickTransferUserData.unit = targetUnit;
+                        currentQuickTransferUserData.is_switched = true;
+                        currentQuickTransferUserData.transferred_from = curUnit;
+                        currentQuickTransferUserData.transfer_type = transferType;
                     }
-                    applyUnitTransferToDOM(userId, workerId, targetUnit);
+                    applyUnitTransferToDOM(userId, workerId, targetUnit, curUnit);
                     closeQuickTransferModal();
                     if (typeof showToast === 'function') {
                         showToast(data.message, 'success');
@@ -2628,6 +2702,19 @@ function openUserDetailsModal(data) {
         unitBadge.className = `badge-pill unit-${uColor}-pill`;
     }
 
+    // Switched Unit Badge
+    const switchedBadge = document.getElementById('detailModalSwitchedBadge');
+    if (switchedBadge) {
+        if (data.is_switched && data.transferred_from) {
+            switchedBadge.style.display = 'inline-flex';
+            const switchedText = document.getElementById('detailModalSwitchedText');
+            if (switchedText) switchedText.innerText = `Switched from ${data.transferred_from}`;
+            switchedBadge.title = `Switched from ${data.transferred_from} (${data.transfer_type || 'Emergency Support'})`;
+        } else {
+            switchedBadge.style.display = 'none';
+        }
+    }
+
     // Status Badge
     updateModalStatusBadge(data.status);
 
@@ -2783,7 +2870,24 @@ async function submitModalUnitTransfer() {
         });
         const data = await res.json();
         if (data.success) {
+            const prevUnit = currentModalUserData.unit;
             currentModalUserData.unit = newUnit;
+            currentModalUserData.is_switched = true;
+            currentModalUserData.transferred_from = prevUnit;
+            currentModalUserData.transfer_type = transferType;
+
+            // Switched Badge update in modal
+            const switchedBadge = document.getElementById('detailModalSwitchedBadge');
+            if (switchedBadge) {
+                if (prevUnit && prevUnit.toLowerCase() !== newUnit.toLowerCase()) {
+                    switchedBadge.style.display = 'inline-flex';
+                    const switchedText = document.getElementById('detailModalSwitchedText');
+                    if (switchedText) switchedText.innerText = `Switched from ${prevUnit}`;
+                    switchedBadge.title = `Switched from ${prevUnit} (${transferType === 'temporary' ? 'Emergency Support' : 'Permanent Transfer'})`;
+                } else {
+                    switchedBadge.style.display = 'none';
+                }
+            }
 
             // Update modal display
             const unitBadge = document.getElementById('detailModalUnitBadge');
@@ -2810,7 +2914,7 @@ async function submitModalUnitTransfer() {
             }
 
             // Update Table Row & Card
-            applyUnitTransferToDOM(currentModalUserData.user_id, currentModalUserData.worker_id, newUnit);
+            applyUnitTransferToDOM(currentModalUserData.user_id, currentModalUserData.worker_id, newUnit, prevUnit);
 
             // Refresh category breakdown from server
             fetchWorkerCategoryDetails(currentModalUserData);
@@ -3010,10 +3114,14 @@ function closeQuickTransferModal() {
     }
 }
 
-function applyUnitTransferToDOM(userId, workerId, newUnit) {
+function applyUnitTransferToDOM(userId, workerId, newUnit, prevUnit) {
     const key = `${userId}_${workerId}`;
     if (window.userRecordsMap && window.userRecordsMap[key]) {
         window.userRecordsMap[key].unit = newUnit;
+        if (prevUnit && prevUnit.toLowerCase() !== newUnit.toLowerCase()) {
+            window.userRecordsMap[key].is_switched = true;
+            window.userRecordsMap[key].transferred_from = prevUnit;
+        }
     }
 
     const uColor = getUnitColor(newUnit);
@@ -3021,6 +3129,7 @@ function applyUnitTransferToDOM(userId, workerId, newUnit) {
     // 1. Update Table Row
     const row = document.getElementById(`userRow_${userId}_${workerId}`);
     const tableBadge = document.getElementById(`tableUnitBadge_${userId}_${workerId}`);
+    const tableSwitched = document.getElementById(`tableSwitchedContainer_${userId}_${workerId}`);
     if (row) {
         row.setAttribute('data-unit', newUnit.toLowerCase());
         row.setAttribute('data-current-unit', newUnit);
@@ -3029,10 +3138,18 @@ function applyUnitTransferToDOM(userId, workerId, newUnit) {
         tableBadge.className = `badge-pill unit-${uColor}-pill`;
         tableBadge.innerHTML = `<i class="fa-solid fa-building"></i> ${escapeHtml(newUnit)}`;
     }
+    if (tableSwitched && prevUnit && prevUnit.toLowerCase() !== newUnit.toLowerCase()) {
+        tableSwitched.innerHTML = `
+            <span class="badge-pill" style="font-size: 0.68rem; padding: 0.12rem 0.45rem; background: rgba(245, 158, 11, 0.14); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 9999px; width: fit-content; display: inline-flex; align-items: center; gap: 0.25rem;" title="Switched from ${escapeHtml(prevUnit)}">
+                <i class="fa-solid fa-arrow-right-arrow-left" style="font-size: 0.6rem;"></i> Switched from ${escapeHtml(prevUnit)}
+            </span>
+        `;
+    }
 
     // 2. Update Card
     const card = document.getElementById(`userCard_${userId}_${workerId}`);
     const cardBadge = document.getElementById(`cardUnitBadge_${userId}_${workerId}`);
+    const cardSwitched = document.getElementById(`cardSwitchedContainer_${userId}_${workerId}`);
     if (card) {
         card.setAttribute('data-unit', newUnit.toLowerCase());
         card.setAttribute('data-current-unit', newUnit);
@@ -3040,6 +3157,13 @@ function applyUnitTransferToDOM(userId, workerId, newUnit) {
     if (cardBadge) {
         cardBadge.className = `badge-pill unit-${uColor}-pill`;
         cardBadge.innerText = newUnit;
+    }
+    if (cardSwitched && prevUnit && prevUnit.toLowerCase() !== newUnit.toLowerCase()) {
+        cardSwitched.innerHTML = `
+            <span class="badge-pill" style="font-size: 0.65rem; padding: 0.1rem 0.38rem; background: rgba(245, 158, 11, 0.14); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 9999px; display: inline-flex; align-items: center; gap: 0.2rem;" title="Switched from ${escapeHtml(prevUnit)}">
+                <i class="fa-solid fa-arrow-right-arrow-left" style="font-size: 0.55rem;"></i> Switched: ${escapeHtml(prevUnit)}
+            </span>
+        `;
     }
 
     // 3. Recalculate tab counts

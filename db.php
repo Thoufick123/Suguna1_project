@@ -124,6 +124,16 @@ class Database {
         ";
         self::$pdo->exec($sqlWorkers);
 
+        try {
+            self::$pdo->exec("ALTER TABLE workers ADD COLUMN origin_unit VARCHAR(50) NULL AFTER unit");
+        } catch (Exception $e) {}
+        try {
+            self::$pdo->exec("ALTER TABLE workers ADD COLUMN transferred_from VARCHAR(50) NULL AFTER origin_unit");
+        } catch (Exception $e) {}
+        try {
+            self::$pdo->exec("ALTER TABLE workers ADD COLUMN transfer_type VARCHAR(50) NULL AFTER transferred_from");
+        } catch (Exception $e) {}
+
         // Table: piece_logs
         $sqlLogs = "
         CREATE TABLE IF NOT EXISTS piece_logs (
