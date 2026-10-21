@@ -198,8 +198,8 @@ include __DIR__ . '/includes/header.php';
         </div>
         <div class="stat-info">
             <div class="stat-label">Unit Top Performer</div>
-            <div class="stat-value" style="font-size: 1.25rem;"><?= $topWorker ? htmlspecialchars($topWorker['name']) : 'N/A' ?></div>
-            <div class="stat-sub"><?= $topWorker ? number_format($topWorker['total_pieces']) . ' pcs (' . htmlspecialchars($topWorker['unique_id']) . ')' : 'No entries yet' ?></div>
+            <div class="stat-value" style="font-size: 1.15rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; display: block;" title="<?= $topWorker ? htmlspecialchars($topWorker['name']) : 'N/A' ?>"><?= $topWorker ? htmlspecialchars($topWorker['name']) : 'N/A' ?></div>
+            <div class="stat-sub" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;"><?= $topWorker ? number_format($topWorker['total_pieces']) . ' pcs (' . htmlspecialchars($topWorker['unique_id']) . ')' : 'No entries yet' ?></div>
         </div>
     </div>
 

@@ -142,7 +142,7 @@ include __DIR__ . '/includes/header.php';
 </div>
 
 <!-- Collapsible Add New Category / Subcategory Form Card -->
-<div class="card mb-4" id="addGarmentCard" style="border: 1px solid rgba(6,182,212,0.3); background: rgba(15,23,42,0.85); box-shadow: 0 8px 24px rgba(0,0,0,0.35);">
+<div class="card mb-4" id="addGarmentCard" style="display: none; border: 1px solid rgba(6,182,212,0.3); background: rgba(15,23,42,0.85); box-shadow: 0 8px 24px rgba(0,0,0,0.35);">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 0.75rem; flex-wrap: wrap; gap: 0.65rem;">
         <div style="min-width: 0; flex: 1 1 auto;">
             <div style="font-weight: 700; font-size: 1.05rem; color: var(--text-primary); display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap; word-break: break-word;">
@@ -289,10 +289,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // Toggle Add Card visibility
     if (btnToggleAddCard && addGarmentCard) {
         btnToggleAddCard.addEventListener('click', () => {
-            const isHidden = addGarmentCard.style.display === 'none';
+            const isHidden = window.getComputedStyle(addGarmentCard).display === 'none';
             addGarmentCard.style.display = isHidden ? 'block' : 'none';
-            toggleAddText.innerText = isHidden ? 'Hide Add Form' : 'Add New Category / Garment';
-            if (isHidden) catInput.focus();
+            if (toggleAddText) {
+                toggleAddText.innerText = isHidden ? 'Hide Add Form' : 'Add New Category / Garment';
+            }
+            if (isHidden && catInput) {
+                catInput.focus();
+                addGarmentCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
         });
     }
     if (btnCloseAddCard && addGarmentCard) {

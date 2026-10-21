@@ -16,6 +16,8 @@ if ($currentPage === 'index') $currentPage = 'register';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?= $pageTitle ?? 'Worker Management & Production Leaderboard' ?></title>
     <meta name="description" content="Production worker registration, piece count tracking, material leads and real-time performance leaderboard.">
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%232563eb'%3E%3Cpath d='M12 2L2 7l10 5 10-5-10-5zm0 9l2.5-1.25L12 8.5l-2.5 1.25L12 11zm0 2.5l-5-2.5-5 2.5 10 5 10-5-5-2.5-5 2.5z'/%3E%3C/svg%3E">
     <!-- Google Fonts: Inter & Plus Jakarta Sans -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -73,10 +75,6 @@ if ($currentPage === 'index') $currentPage = 'register';
                         <a href="unit_workers.php?unit=Unit+1" class="nav-link <?= ($currentPage === 'unit_workers') ? 'active' : '' ?>">
                             <i class="fa-solid fa-building-user"></i>
                             <span>Units</span>
-                        </a>
-                        <a href="index.php" class="nav-link <?= ($currentPage === 'register') ? 'active' : '' ?>">
-                            <i class="fa-solid fa-user-plus"></i>
-                            <span>Register</span>
                         </a>
                         <a href="user_details.php" class="nav-link <?= ($currentPage === 'user_details') ? 'active' : '' ?>">
                             <i class="fa-solid fa-address-card text-emerald"></i>
