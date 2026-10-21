@@ -23,6 +23,16 @@ if (!empty($requestedUnit) && !in_array($requestedUnit, $validUnitNames)) {
     $requestedUnit = '';
 }
 
+function resolveUnitBadgeColor($u) {
+    $uLower = strtolower(trim($u ?? ''));
+    if (strpos($uLower, 'unit 2') !== false || $uLower === 'u2') return 'pink';
+    if (strpos($uLower, 'unit 1') !== false || $uLower === 'u1') return 'cyan';
+    if (strpos($uLower, 'unit 3') !== false || $uLower === 'u3') return 'purple';
+    if (strpos($uLower, 'unit 4') !== false || $uLower === 'u4') return 'amber';
+    if (strpos($uLower, 'unit 5') !== false || $uLower === 'u5') return 'blue';
+    return 'emerald';
+}
+
 // Fetch all registered users with linked worker profile data
 $usersQuery = "
     SELECT 
@@ -798,7 +808,7 @@ include __DIR__ . '/includes/header.php';
                         $workerStatus = !empty($user['worker_status']) ? $user['worker_status'] : 'Active';
                         $isActive = (strcasecmp($workerStatus, 'Active') === 0);
                         $isRootAdmin = ($userId === 1 || strcasecmp($user['username'], 'admin') === 0);
-                        $uColor = (stripos($unitVal, 'unit 2') !== false) ? 'pink' : ((stripos($unitVal, 'unit 1') !== false) ? 'cyan' : 'emerald');
+                        $uColor = resolveUnitBadgeColor($unitVal);
 
                         // Avatar gradient per role
                         $avatarBg = 'linear-gradient(135deg, #2563eb, #3b82f6)';
@@ -899,7 +909,7 @@ include __DIR__ . '/includes/header.php';
                                 <?php if ($currentUser && in_array($currentUser['role'], ['admin', 'supervisor']) && !$isRootAdmin): ?>
                                     <button type="button" class="btn-unit-transfer-quick" 
                                         onclick="quickTransferUserUnit(<?= htmlspecialchars(json_encode($userRecordJson), ENT_QUOTES, 'UTF-8') ?>)" 
-                                        title="Transfer user between Unit 1 &amp; Unit 2 (Emergency or Permanent)">
+                                        title="Transfer user between production units (Emergency Support or Permanent Assignment)">
                                         <i class="fa-solid fa-arrow-right-arrow-left"></i>
                                     </button>
                                 <?php endif; ?>
@@ -977,7 +987,7 @@ include __DIR__ . '/includes/header.php';
             $workerStatus = !empty($user['worker_status']) ? $user['worker_status'] : 'Active';
             $isActive = (strcasecmp($workerStatus, 'Active') === 0);
             $isRootAdmin = ($userId === 1 || strcasecmp($user['username'], 'admin') === 0);
-            $uColor = (stripos($unitVal, 'unit 2') !== false) ? 'pink' : ((stripos($unitVal, 'unit 1') !== false) ? 'cyan' : 'emerald');
+            $uColor = resolveUnitBadgeColor($unitVal);
 
             $avatarBg = 'linear-gradient(135deg, #2563eb, #3b82f6)';
             if ($sRole === 'admin') $avatarBg = 'linear-gradient(135deg, #9333ea, #c084fc)';
@@ -1052,7 +1062,7 @@ include __DIR__ . '/includes/header.php';
                         <?php if ($currentUser && in_array($currentUser['role'], ['admin', 'supervisor']) && !$isRootAdmin): ?>
                             <button type="button" class="btn-unit-transfer-quick" 
                                 onclick="quickTransferUserUnit(<?= htmlspecialchars(json_encode($userRecordJson), ENT_QUOTES, 'UTF-8') ?>)" 
-                                title="Transfer between Unit 1 &amp; Unit 2">
+                                title="Transfer user between production units (Emergency Support or Permanent Assignment)">
                                 <i class="fa-solid fa-arrow-right-arrow-left"></i>
                             </button>
                         <?php endif; ?>
@@ -1438,7 +1448,7 @@ include __DIR__ . '/includes/header.php';
             <div style="background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.25); border-radius: var(--radius-md); padding: 0.65rem 0.85rem; margin-bottom: 1.25rem; display: flex; gap: 0.55rem; align-items: flex-start;">
                 <i class="fa-solid fa-circle-check text-emerald" style="font-size: 0.9rem; margin-top: 0.1rem;"></i>
                 <div style="font-size: 0.74rem; color: #cbd5e1; line-height: 1.45;">
-                    <strong style="color: #34d399;">Order-Wise Piece Tracking Preserved:</strong> All past stitched products and category volumes in both units remain stored under this user's profile. You can transfer back to Unit 1 anytime.
+                    <strong style="color: #34d399;">Order-Wise Piece Tracking Preserved:</strong> All past stitched products and category volumes across all production units remain securely preserved under this user's profile. You can reallocate or switch back anytime without piece count loss.
                 </div>
             </div>
 
@@ -2778,7 +2788,7 @@ async function submitModalUnitTransfer() {
             // Update modal display
             const unitBadge = document.getElementById('detailModalUnitBadge');
             const currUnitDisplay = document.getElementById('detailModalCurrentUnitDisplay');
-            const uColor = newUnit.toLowerCase().includes('unit 2') ? 'pink' : (newUnit.toLowerCase().includes('unit 1') ? 'cyan' : 'emerald');
+            const uColor = getUnitColor(newUnit);
             
             if (unitBadge) {
                 unitBadge.innerText = newUnit;
@@ -2825,37 +2835,63 @@ async function submitModalUnitTransfer() {
 let currentQuickTransferUserData = null;
 window.userRecordsMap = window.userRecordsMap || {};
 
-// Helper to check if an option corresponds to a user's current unit
+// Helper to get unit badge color dynamically for any unit
+function getUnitColor(unitName) {
+    if (!unitName) return 'cyan';
+    const u = unitName.toString().toLowerCase();
+    if (u.includes('unit 2') || u === 'u2') return 'pink';
+    if (u.includes('unit 1') || u === 'u1') return 'cyan';
+    if (u.includes('unit 3') || u === 'u3') return 'purple';
+    if (u.includes('unit 4') || u === 'u4') return 'amber';
+    if (u.includes('unit 5') || u === 'u5') return 'blue';
+    return 'emerald';
+}
+
+// Helper to check if an option corresponds to a user's current unit (100% dynamic for any unit)
 function isMatchingUnit(optVal, optTitle, currentUnit) {
     if (!currentUnit) return false;
     const cur = currentUnit.toString().trim().toLowerCase();
     const val = (optVal || '').toString().trim().toLowerCase();
     const title = (optTitle || '').toString().trim().toLowerCase();
 
+    // 1. Direct equality
     if (val === cur || title === cur) return true;
 
+    // 2. Strict alphanumeric normalized equality
     const curNorm = cur.replace(/[^a-z0-9]/g, '');
     const valNorm = val.replace(/[^a-z0-9]/g, '');
     const titleNorm = title.replace(/[^a-z0-9]/g, '');
 
     if (valNorm === curNorm || titleNorm === curNorm) return true;
 
-    const isCurUnit1 = (curNorm === 'unit1' || curNorm === 'u1' || curNorm === 'productionunit1');
-    const isCurUnit2 = (curNorm === 'unit2' || curNorm === 'u2' || curNorm === 'productionunit2');
-    const isCurKadampadi = curNorm.includes('kadampadi');
+    // 3. Strip common prefixes ('production', 'facility', 'plant')
+    const stripPrefix = (s) => s.replace(/^(production|facility|plant)/, '').replace(/[^a-z0-9]/g, '');
+    const curBase = stripPrefix(curNorm);
+    const valBase = stripPrefix(valNorm);
+    const titleBase = stripPrefix(titleNorm);
 
-    if (isCurKadampadi) {
-        return valNorm.includes('kadampadi') || titleNorm.includes('kadampadi');
+    if (curBase && (curBase === valBase || curBase === titleBase)) return true;
+
+    // 4. Numbered unit detection (e.g., Unit 1, Unit 2, Unit 3, PU003, etc.)
+    const curDigits = curNorm.match(/\d+/g)?.join('');
+    const valDigits = valNorm.match(/\d+/g)?.join('');
+    const titleDigits = titleNorm.match(/\d+/g)?.join('');
+
+    if (curDigits) {
+        const isCurUnitPattern = /^(pu|u|unit|productionunit)\d+$/.test(curNorm) || curNorm.includes('unit') || curNorm.startsWith('pu');
+        const isValUnitPattern = /^(pu|u|unit|productionunit)\d+$/.test(valNorm) || valNorm.includes('unit') || valNorm.startsWith('pu');
+        const isTitleUnitPattern = /^(pu|u|unit|productionunit)\d+$/.test(titleNorm) || titleNorm.includes('unit');
+
+        if (isCurUnitPattern) {
+            if (isValUnitPattern && curDigits === valDigits) return true;
+            if (isTitleUnitPattern && curDigits === titleDigits) return true;
+        }
     }
 
-    if (isCurUnit1) {
-        if (valNorm.includes('kadampadi') || titleNorm.includes('kadampadi')) return false;
-        return (valNorm === 'unit1' || valNorm === 'productionunit1' || titleNorm === 'productionunit1' || titleNorm === 'unit1');
-    }
-
-    if (isCurUnit2) {
-        if (valNorm.includes('kadampadi') || titleNorm.includes('kadampadi')) return false;
-        return (valNorm === 'unit2' || valNorm === 'productionunit2' || titleNorm === 'productionunit2' || titleNorm === 'unit2');
+    // 5. Named units (e.g. Kadampadi, Cutting, Finishing)
+    if (curNorm.length >= 4) {
+        if (valNorm.includes(curNorm) || curNorm.includes(valNorm)) return true;
+        if (titleNorm.includes(curNorm) || curNorm.includes(titleNorm)) return true;
     }
 
     return false;
@@ -2948,7 +2984,7 @@ function quickTransferUserUnit(data) {
     if (currBadge) {
         const cUnit = data.unit || 'Unit 1';
         currBadge.innerText = cUnit;
-        const uColor = cUnit.toLowerCase().includes('unit 2') ? 'pink' : (cUnit.toLowerCase().includes('unit 1') ? 'cyan' : 'emerald');
+        const uColor = getUnitColor(cUnit);
         currBadge.className = `badge-pill unit-${uColor}-pill`;
     }
 
@@ -2980,7 +3016,7 @@ function applyUnitTransferToDOM(userId, workerId, newUnit) {
         window.userRecordsMap[key].unit = newUnit;
     }
 
-    const uColor = newUnit.toLowerCase().includes('unit 2') ? 'pink' : (newUnit.toLowerCase().includes('unit 1') ? 'cyan' : 'emerald');
+    const uColor = getUnitColor(newUnit);
 
     // 1. Update Table Row
     const row = document.getElementById(`userRow_${userId}_${workerId}`);
