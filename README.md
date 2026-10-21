@@ -1,4 +1,4 @@
-# Suguna Project - FabriqPro Production Tracker
+# Suguna1_project - FabriqPro Production Tracker
 
 FabriqPro is a garment manufacturing production and piece-rate tracking web application with real-time workstation monitoring, worker leaderboard, unit management, and hardware IoT counter integration (Arduino Uno).
 
