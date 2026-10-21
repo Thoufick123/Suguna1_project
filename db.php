@@ -196,6 +196,25 @@ class Database {
             self::$pdo->exec("ALTER TABLE garment_categories ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'Active' AFTER sub_subcategory_name");
         } catch (Exception $e) {}
 
+        // Seed initial garment categories if table is empty
+        try {
+            $catCount = (int)self::$pdo->query("SELECT COUNT(*) FROM garment_categories")->fetchColumn();
+            if ($catCount === 0) {
+                $seedCats = [
+                    ['Nighty', 'Regular Cotton', 'Daily Wear'],
+                    ['Feeding Nighty', 'Front Zip', 'Comfort Stretch'],
+                    ['Kurti', 'Cotton Kurti', 'A-Line / Printed'],
+                    ['Pajama', 'Casual Pajama', 'Elastic Waist'],
+                    ['T-Shirt', 'Round Neck', 'Cotton Blend'],
+                    ['Frock', 'Kids Frock', 'Summer Wear'],
+                ];
+                $insCat = self::$pdo->prepare("INSERT INTO garment_categories (category_name, subcategory_name, sub_subcategory_name, status, created_by) VALUES (?, ?, ?, 'Active', 'system')");
+                foreach ($seedCats as $sc) {
+                    $insCat->execute($sc);
+                }
+            }
+        } catch (Exception $e) {}
+
         // Table: worker_roles (Admin-managed Worker Designations / Roles - starts empty until admin adds)
         $sqlRoles = "
         CREATE TABLE IF NOT EXISTS worker_roles (

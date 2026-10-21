@@ -284,44 +284,45 @@ function filterWorkersByUnit(unitName) {
 
 <!-- Styles for User-Friendly Workstation -->
 <style>
-/* Modern Compact Operator Header */
+/* Modern Luxury Operator Header Card */
 .uf-operator-bar {
     background: var(--bg-card);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-lg);
-    padding: 0.85rem 1.15rem;
-    box-shadow: var(--shadow-card);
+    padding: 1rem 1.25rem;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
     backdrop-filter: blur(20px);
-    margin-bottom: 1.5rem;
+    margin-bottom: 1.25rem;
 }
 
 .uf-operator-flex {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.75rem;
+    gap: 0.85rem;
     flex-wrap: wrap;
 }
 
 .uf-profile-left {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
+    gap: 0.85rem;
+    min-width: 0;
 }
 
 .uf-avatar {
-    width: 44px;
-    height: 44px;
+    width: 48px;
+    height: 48px;
     border-radius: 50%;
-    background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+    background: linear-gradient(135deg, #06b6d4 0%, #2563eb 100%);
     color: #fff;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-weight: 700;
-    font-size: 1.15rem;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.35);
+    font-weight: 800;
+    font-size: 1.25rem;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 4px 14px rgba(6, 182, 212, 0.35);
     flex-shrink: 0;
 }
 
@@ -334,17 +335,18 @@ function filterWorkersByUnit(unitName) {
 
 .uf-worker-name {
     font-size: 1.15rem;
-    font-weight: 700;
+    font-weight: 800;
     color: var(--text-primary);
+    letter-spacing: -0.3px;
 }
 
 .uf-sub-row {
-    font-size: 0.76rem;
+    font-size: 0.78rem;
     color: var(--text-muted);
     display: flex;
     align-items: center;
-    gap: 0.4rem;
-    margin-top: 0.15rem;
+    gap: 0.45rem;
+    margin-top: 0.2rem;
 }
 
 .uf-actions-right {
@@ -354,53 +356,143 @@ function filterWorkersByUnit(unitName) {
     flex-wrap: wrap;
 }
 
+.date-toggle-group {
+    display: inline-flex;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 2px;
+    gap: 2px;
+}
+
+.date-toggle-group .btn {
+    border: none;
+    border-radius: calc(var(--radius-sm) - 2px);
+    font-weight: 700;
+    transition: all 0.2s ease;
+}
+
+.date-toggle-group .btn.btn-primary {
+    background: var(--primary);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35);
+}
+
+.uf-worker-switch-row {
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    flex-wrap: wrap;
+}
+
+.uf-worker-switch-form {
+    display: flex;
+    gap: 0.45rem;
+    flex: 1;
+    min-width: 220px;
+}
+
 /* User-Friendly Workstation Form */
 .uf-workstation-card {
     border: 1px solid var(--border-color);
     border-radius: var(--radius-lg);
     background: var(--bg-card);
-    box-shadow: var(--shadow-card);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.28);
     backdrop-filter: blur(20px);
     margin-bottom: 2.25rem !important;
 }
 
-/* Garment Quick Chips */
+.uf-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.uf-section-label {
+    font-size: 0.95rem;
+    font-weight: 800;
+    color: var(--text-primary);
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    letter-spacing: -0.2px;
+}
+
+.uf-step-badge {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #06b6d4, #0284c7);
+    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 800;
+    box-shadow: 0 2px 8px rgba(6, 182, 212, 0.4);
+}
+
+.uf-garment-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+}
+
+/* Garment Quick Chips Grid */
 .garment-quick-chips-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-    gap: 0.6rem;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.65rem;
+}
+@media (min-width: 520px) {
+    .garment-quick-chips-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+@media (min-width: 860px) {
+    .garment-quick-chips-grid {
+        grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    }
 }
 
 .garment-chip-btn {
     border: 1px solid var(--border-color);
-    background: var(--bg-surface);
-    border-radius: var(--radius-md);
-    padding: 0.65rem 0.75rem;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 12px;
+    padding: 0.7rem 0.8rem;
     display: flex;
     align-items: center;
-    gap: 0.55rem;
+    justify-content: space-between;
+    gap: 0.5rem;
     cursor: pointer;
-    transition: all var(--transition-fast);
-    text-align: left;
-    color: var(--text-secondary);
-    min-height: 48px;
-    box-sizing: border-box;
+    transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+    color: var(--text-primary);
+    min-height: 52px;
     width: 100%;
+    box-sizing: border-box;
 }
 
 .garment-chip-btn:hover {
-    background: var(--bg-card-hover);
-    border-color: var(--primary);
-    color: var(--text-primary);
-    transform: translateY(-1px);
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(56, 189, 248, 0.6);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
 }
 
 .garment-chip-btn.active {
-    background: rgba(59, 130, 246, 0.14);
-    border-color: var(--primary);
-    color: var(--primary);
-    box-shadow: 0 0 14px rgba(59, 130, 246, 0.25);
-    font-weight: 700;
+    background: rgba(6, 182, 212, 0.15) !important;
+    border-color: #06b6d4 !important;
+    color: #fff !important;
+    box-shadow: 0 0 16px rgba(6, 182, 212, 0.35) !important;
+    transform: translateY(-1px);
 }
 
 .garment-chip-icon {
@@ -417,152 +509,216 @@ function filterWorkersByUnit(unitName) {
     line-height: 1.2;
 }
 
-/* User-Friendly Counter */
+/* Empty State Card */
+.uf-empty-categories-card {
+    grid-column: 1 / -1;
+    padding: 1.75rem 1.25rem;
+    text-align: center;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px dashed rgba(255, 255, 255, 0.12);
+    border-radius: var(--radius-md);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+.uf-empty-icon-ring {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background: rgba(6, 182, 212, 0.1);
+    border: 1px solid rgba(6, 182, 212, 0.3);
+    color: var(--accent-cyan);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.35rem;
+    margin-bottom: 0.65rem;
+    box-shadow: 0 0 16px rgba(6, 182, 212, 0.2);
+}
+.uf-empty-title {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0 0 0.25rem 0;
+}
+.uf-empty-desc {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin: 0 0 0.85rem 0;
+    max-width: 280px;
+    line-height: 1.4;
+}
+
+/* Tactile Big Touch Stepper */
 .user-friendly-counter-wrap {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 0.75rem;
-    margin: 0.6rem 0 0.85rem 0;
+    gap: 0.85rem;
+    margin: 0.5rem 0;
 }
 
 .uf-counter-btn {
-    width: 52px;
-    height: 52px;
-    border-radius: var(--radius-md);
+    width: 56px;
+    height: 56px;
+    border-radius: 14px;
     border: 1px solid var(--border-color);
-    background: var(--bg-surface);
+    background: rgba(255, 255, 255, 0.04);
     color: var(--text-primary);
-    font-size: 1.3rem;
+    font-size: 1.4rem;
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    transition: all var(--transition-fast);
-}
-
-.uf-counter-btn:hover {
-    background: var(--bg-card-hover);
-    border-color: var(--primary);
-    color: var(--primary);
+    transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .uf-counter-btn:active {
-    transform: scale(0.94);
+    transform: scale(0.92);
+}
+
+.uf-counter-btn.dec-btn:hover {
+    background: rgba(244, 63, 94, 0.15);
+    border-color: #f43f5e;
+    color: #f43f5e;
+}
+
+.uf-counter-btn.inc-btn:hover {
+    background: rgba(16, 185, 129, 0.15);
+    border-color: #10b981;
+    color: #10b981;
 }
 
 .uf-counter-input {
     width: 140px;
-    height: 52px;
-    font-size: 1.85rem;
-    font-weight: 800;
+    height: 56px;
+    font-size: 2.2rem;
+    font-weight: 900;
     font-family: var(--font-heading, sans-serif);
     text-align: center;
-    color: var(--accent-emerald);
-    background: var(--bg-input);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    box-shadow: inset 0 2px 4px rgba(0,0,0,0.25);
+    color: #10b981;
+    background: rgba(0, 0, 0, 0.35);
+    border: 2px solid rgba(16, 185, 129, 0.35);
+    border-radius: 14px;
+    box-shadow: inset 0 2px 8px rgba(0,0,0,0.4);
     cursor: default;
     user-select: none;
-    -webkit-user-select: none;
-    caret-color: transparent;
-    letter-spacing: 1px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.5px;
 }
 
-/* Completely hide Webkit and Firefox number spinner arrows */
-.uf-counter-input::-webkit-outer-spin-button,
-.uf-counter-input::-webkit-inner-spin-button {
-    -webkit-appearance: none !important;
-    margin: 0 !important;
-    display: none !important;
-}
-
-.uf-counter-input[type="number"],
-input[type="number"].uf-counter-input {
-    -moz-appearance: textfield !important;
-    appearance: textfield !important;
-}
-
-.uf-counter-input:focus {
-    outline: none;
-    border-color: var(--accent-emerald);
-    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.25);
-}
-
-/* Quick Add Pills */
-.quick-add-pills-row {
+/* Submit Action Row */
+.uf-submit-row {
     display: flex;
+    gap: 0.65rem;
     align-items: center;
-    justify-content: center;
-    gap: 0.45rem;
-    flex-wrap: wrap;
-}
-
-.quick-pill-btn {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-color);
-    color: var(--text-secondary);
-    padding: 0.35rem 0.75rem;
-    border-radius: 50px;
-    font-size: 0.82rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all var(--transition-fast);
-}
-
-.quick-pill-btn:hover {
-    background: var(--bg-card-hover);
-    border-color: var(--primary);
-    color: var(--text-primary);
-    transform: translateY(-1px);
-}
-
-.quick-pill-btn:active {
-    transform: scale(0.95);
-}
-
-.quick-pill-btn.pill-reset {
-    color: var(--text-muted);
-    font-weight: 500;
-}
-.quick-pill-btn.pill-reset:hover {
-    background: rgba(244, 63, 94, 0.15);
-    border-color: rgba(244, 63, 94, 0.4);
-    color: #f43f5e;
 }
 
 .uf-submit-btn {
-    transition: all 0.25s ease;
+    transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
 }
-.cloth-lb-unit-btn {
-    background: transparent;
-    border: 1px solid transparent;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: all 0.2s ease;
-}
-.cloth-lb-unit-btn:hover:not(.active) {
-    background: rgba(255, 255, 255, 0.08);
-    color: var(--text-primary);
-}
-.cloth-lb-unit-btn.active.active-cyan {
-    background: rgba(6, 182, 212, 0.25) !important;
-    color: #fff !important;
-    border: 1px solid var(--accent-cyan) !important;
-    box-shadow: 0 0 10px rgba(6, 182, 212, 0.35);
-}
-.cloth-lb-unit-btn.active.active-pink {
-    background: rgba(244, 63, 94, 0.25) !important;
-    color: #fff !important;
-    border: 1px solid var(--unit2-color, #ec4899) !important;
-    box-shadow: 0 0 10px rgba(244, 63, 94, 0.35);
-}
-.cloth-lb-unit-btn.active.active-emerald {
-    background: rgba(16, 185, 129, 0.25) !important;
-    color: #fff !important;
-    border: 1px solid var(--accent-emerald) !important;
-    box-shadow: 0 0 10px rgba(16, 185, 129, 0.35);
+
+/* ===================================================================
+   MOBILE RESPONSIVE TWEAKS (< 600px)
+   =================================================================== */
+@media (max-width: 600px) {
+    .uf-operator-bar {
+        padding: 0.85rem !important;
+        margin-bottom: 0.85rem !important;
+    }
+    .uf-operator-flex {
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 0.75rem !important;
+    }
+    .uf-profile-left {
+        width: 100% !important;
+    }
+    .uf-actions-right {
+        width: 100% !important;
+        display: flex !important;
+        gap: 0.45rem !important;
+    }
+    .date-toggle-group {
+        flex: 1 1 auto !important;
+        display: flex !important;
+    }
+    .date-toggle-group .btn {
+        flex: 1 !important;
+        text-align: center !important;
+        padding: 0.35rem 0.4rem !important;
+        font-size: 0.78rem !important;
+    }
+    .uf-actions-right a[href="leaderboard.php"] {
+        flex: 1 1 auto !important;
+        text-align: center !important;
+        padding: 0.35rem 0.5rem !important;
+        font-size: 0.78rem !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 0.35rem !important;
+    }
+    .uf-worker-switch-row {
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 0.35rem !important;
+    }
+    .uf-worker-switch-form {
+        width: 100% !important;
+        min-width: 0 !important;
+    }
+    .uf-worker-switch-form select {
+        width: 100% !important;
+        height: 36px !important;
+        font-size: 0.82rem !important;
+    }
+    #userStitchForm {
+        padding: 0.95rem 0.85rem !important;
+    }
+    .uf-section-header {
+        flex-direction: row !important;
+        align-items: center !important;
+    }
+    .uf-garment-actions {
+        gap: 0.25rem !important;
+    }
+    .uf-garment-actions .btn {
+        padding: 0.22rem 0.45rem !important;
+        font-size: 0.7rem !important;
+    }
+    .uf-submit-row {
+        display: grid !important;
+        grid-template-columns: auto 1fr !important;
+        gap: 0.55rem !important;
+    }
+    #userResetFormBtn {
+        grid-column: 1 !important;
+        grid-row: 1 !important;
+        height: 50px !important;
+        width: 50px !important;
+        padding: 0 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
+    #userCompleteBtn {
+        grid-column: 2 !important;
+        grid-row: 1 !important;
+        height: 50px !important;
+        min-width: 0 !important;
+        font-size: 1.05rem !important;
+        padding: 0 0.85rem !important;
+    }
+    #userSaveBtn {
+        grid-column: 1 / -1 !important;
+        grid-row: 2 !important;
+        height: 44px !important;
+        width: 100% !important;
+        font-size: 0.9rem !important;
+        min-width: 0 !important;
+    }
 }
 </style>
 
@@ -634,12 +790,14 @@ input[type="number"].uf-counter-input {
 
     <?php if ($currentUser['role'] === 'admin' || $currentUser['role'] === 'supervisor'): ?>
         <!-- Admin/Supervisor Switcher Bar -->
-        <div style="margin-top: 0.65rem; padding-top: 0.65rem; border-top: 1px solid rgba(255,255,255,0.06); display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
-            <span class="text-muted" style="font-size: 0.74rem; font-weight: 600;"><i class="fa-solid fa-user-gear text-cyan"></i> Switch Worker:</span>
-            <form method="GET" action="daily_output.php" id="workerFilterForm" style="display: flex; gap: 0.45rem; flex: 1; min-width: 200px;">
+        <div class="uf-worker-switch-row">
+            <span class="text-muted" style="font-size: 0.78rem; font-weight: 700; display: flex; align-items: center; gap: 0.35rem;">
+                <i class="fa-solid fa-user-gear text-cyan"></i> Switch Worker:
+            </span>
+            <form method="GET" action="daily_output.php" id="workerFilterForm" class="uf-worker-switch-form">
                 <input type="hidden" name="date" value="<?= htmlspecialchars($selectedDate) ?>">
                 <input type="hidden" name="unit" id="activeUnitInput" value="<?= htmlspecialchars($activeUnit) ?>">
-                <select name="worker_id" id="operatorWorkerSelect" class="form-control" onchange="this.form.submit()" style="font-size: 0.8rem; padding: 0.35rem 0.6rem; height: 32px;">
+                <select name="worker_id" id="operatorWorkerSelect" class="form-control" onchange="this.form.submit()" style="font-size: 0.82rem; padding: 0.4rem 0.65rem; border-radius: var(--radius-sm);">
                     <?php 
                     $workersByUnit = [];
                     foreach ($allWorkers as $w) {
@@ -673,22 +831,24 @@ input[type="number"].uf-counter-input {
         <input type="hidden" id="userClothSelect" name="material_name" required>
 
         <!-- STEP 1: Quick Garment Tap Chips -->
-        <div style="margin-bottom: 1.15rem;">
-            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.55rem; flex-wrap: wrap; gap: 0.4rem;">
-                <label style="font-size: 0.86rem; font-weight: 700; color: var(--text-primary); margin: 0; display: flex; align-items: center; gap: 0.4rem;">
-                    <i class="fa-solid fa-shirt text-cyan"></i> 1. Select Garment <span class="required">*</span>
+        <div style="margin-bottom: 1.25rem;">
+            <div class="uf-section-header">
+                <label class="uf-section-label">
+                    <span class="uf-step-badge">1</span>
+                    <span>Select Garment</span>
+                    <span class="required" style="color: var(--accent-rose);">*</span>
                 </label>
-                <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+                <div class="uf-garment-actions">
                     <?php if ($currentUser && ($currentUser['role'] === 'admin' || $currentUser['role'] === 'supervisor')): ?>
-                        <button type="button" class="btn btn-outline btn-xs" id="btnToggleInlineAddCat" style="font-size: 0.72rem; padding: 0.2rem 0.55rem; border-radius: 6px; color: var(--accent-cyan); border-color: rgba(6,182,212,0.4);" title="Quick add a new category or subcategory">
-                            <i class="fa-solid fa-circle-plus text-cyan"></i> + Add Category
+                        <button type="button" class="btn btn-outline btn-xs" id="btnToggleInlineAddCat" style="font-size: 0.74rem; padding: 0.25rem 0.55rem; border-radius: 8px; color: var(--accent-cyan); border-color: rgba(6,182,212,0.4);" title="Quick add category">
+                            <i class="fa-solid fa-circle-plus text-cyan"></i> + Add
                         </button>
-                        <button type="button" class="btn btn-outline btn-xs" id="openManageCategoriesBtn" style="font-size: 0.72rem; padding: 0.2rem 0.55rem; border-radius: 6px;" title="Open full 3-tier category manager">
+                        <button type="button" class="btn btn-outline btn-xs" id="openManageCategoriesBtn" style="font-size: 0.74rem; padding: 0.25rem 0.55rem; border-radius: 8px;" title="Manage all categories">
                             <i class="fa-solid fa-layer-group"></i> Manage
                         </button>
                     <?php endif; ?>
-                    <button type="button" class="btn btn-outline btn-xs" id="btnToggleAllCategories" style="font-size: 0.72rem; padding: 0.2rem 0.55rem; border-radius: 6px;">
-                        <i class="fa-solid fa-sliders"></i> <span id="moreCategoriesBtnLabel">More / Custom</span>
+                    <button type="button" class="btn btn-outline btn-xs" id="btnToggleAllCategories" style="font-size: 0.74rem; padding: 0.25rem 0.55rem; border-radius: 8px;">
+                        <i class="fa-solid fa-sliders"></i> <span id="moreCategoriesBtnLabel">More</span>
                     </button>
                 </div>
             </div>
@@ -741,11 +901,16 @@ input[type="number"].uf-counter-input {
             <!-- Quick Chips Grid (Strictly Admin-Added Categories Only) -->
             <div class="garment-quick-chips-grid" id="garmentQuickChipsGrid">
                 <?php if (empty($adminCategoryChips)): ?>
-                    <div style="grid-column: 1 / -1; padding: 1.25rem; text-align: center; color: var(--text-muted); background: rgba(255,255,255,0.02); border: 1px dashed var(--border-color); border-radius: var(--radius-md); font-size: 0.85rem;">
-                        <i class="fa-solid fa-inbox" style="font-size: 1.5rem; display: block; margin-bottom: 0.4rem; opacity: 0.5;"></i>
-                        No garment categories added yet by admin.
+                    <div class="uf-empty-categories-card">
+                        <div class="uf-empty-icon-ring">
+                            <i class="fa-solid fa-shirt"></i>
+                        </div>
+                        <div class="uf-empty-title">No Garment Categories Added Yet</div>
+                        <div class="uf-empty-desc">Add stitching categories (e.g. Nighty, Kurti, T-Shirt) to enable 1-tap quick piece logging.</div>
                         <?php if ($currentUser && ($currentUser['role'] === 'admin' || $currentUser['role'] === 'supervisor')): ?>
-                            <br><span style="color: var(--accent-cyan); font-weight: 600; cursor: pointer;" onclick="document.getElementById('btnToggleInlineAddCat')?.click();">Click here to add the first category &amp; subcategory</span>
+                            <button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('btnToggleInlineAddCat')?.click();" style="border-radius: 99px; padding: 0.4rem 1.15rem; font-size: 0.8rem; font-weight: 700; display: inline-flex; align-items: center; gap: 0.4rem;">
+                                <i class="fa-solid fa-circle-plus"></i> Add First Garment Category
+                            </button>
                         <?php endif; ?>
                     </div>
                 <?php else: ?>
@@ -862,8 +1027,8 @@ input[type="number"].uf-counter-input {
         </div>
 
         <!-- STEP 4: Complete (+1) Instant Save Button & Manual Save Button -->
-        <div style="display: flex; gap: 0.65rem; align-items: center;">
-            <button type="button" class="btn btn-outline" id="userResetFormBtn" style="padding: 0.85rem 1.05rem; border-radius: var(--radius-sm);" title="Reset Counter">
+        <div class="uf-submit-row">
+            <button type="button" class="btn btn-outline" id="userResetFormBtn" title="Reset Counter">
                 <i class="fa-solid fa-rotate-left"></i>
             </button>
 

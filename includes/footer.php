@@ -30,12 +30,12 @@
                 </a>
                 <a href="user_details.php" class="mobile-nav-item <?= ($curPage === 'user_details') ? 'active' : '' ?>">
                     <i class="fa-solid fa-address-card"></i>
-                    <span>User Details</span>
+                    <span>Users</span>
                 </a>
             <?php endif; ?>
             <a href="leaderboard.php" class="mobile-nav-item <?= ($curPage === 'leaderboard') ? 'active' : '' ?>">
                 <i class="fa-solid fa-trophy"></i>
-                <span>Leaderboard</span>
+                <span>Ranks</span>
             </a>
 
             <a href="logout.php" class="mobile-nav-item" title="Sign out">
