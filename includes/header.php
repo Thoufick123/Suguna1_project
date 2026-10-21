@@ -76,6 +76,10 @@ if ($currentPage === 'index') $currentPage = 'register';
                             <i class="fa-solid fa-building-user"></i>
                             <span>Units</span>
                         </a>
+                        <a href="index.php" class="nav-link <?= ($currentPage === 'register') ? 'active' : '' ?>">
+                            <i class="fa-solid fa-user-plus text-cyan"></i>
+                            <span>Register</span>
+                        </a>
                         <a href="user_details.php" class="nav-link <?= ($currentPage === 'user_details') ? 'active' : '' ?>">
                             <i class="fa-solid fa-address-card text-emerald"></i>
                             <span>User Details</span>
