@@ -106,9 +106,11 @@ if (!empty($paramDate) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $paramDate)) {
     $periodLabel = 'Today (' . date('M j, Y') . ')';
 }
 
-// Determine active date mode tab: 'day', 'month', 'year', 'all'
+// Determine active date mode tab: 'day', 'month', 'range', 'year', 'all'
 $currentDateMode = 'day';
-if (in_array($activePeriodKey, ['month', 'this_month']) || !empty($paramMonth)) {
+if ((!empty($paramFromDate) && !empty($paramToDate)) || $activePeriodKey === 'range') {
+    $currentDateMode = 'range';
+} elseif (in_array($activePeriodKey, ['month', 'this_month']) || !empty($paramMonth)) {
     $currentDateMode = 'month';
 } elseif (in_array($activePeriodKey, ['year', 'this_year']) || !empty($paramYear)) {
     $currentDateMode = 'year';
@@ -137,7 +139,7 @@ if (!empty($paramShift)) {
 }
 
 if (!empty($paramUnit)) {
-    $whereClauses[] = "w.unit = :param_unit";
+    $whereClauses[] = "COALESCE(NULLIF(pl.unit, ''), w.unit) = :param_unit";
     $params[':param_unit'] = $paramUnit;
 }
 
@@ -187,7 +189,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
     ]);
 
     $csvStmt = $pdo->prepare("
-        SELECT pl.id, pl.work_date, pl.shift, w.unique_id, w.name, w.unit, w.role,
+        SELECT pl.id, pl.work_date, pl.shift, w.unique_id, w.name, COALESCE(NULLIF(pl.unit, ''), w.unit) as unit, w.role,
                pl.material_name, pl.piece_count, pl.created_at, pl.notes
         FROM piece_logs pl
         JOIN workers w ON w.id = pl.worker_id
@@ -306,7 +308,7 @@ foreach ($productionUnits as $u) {
 
     // Pieces produced in unit within selected timeframe
     $uWhere = $whereClauses;
-    $uWhere[] = "w.unit = :unit_name";
+    $uWhere[] = "COALESCE(NULLIF(pl.unit, ''), w.unit) = :unit_name";
     $uWhereSql = " WHERE " . implode(" AND ", $uWhere);
     $uParams = array_merge($params, [':unit_name' => $uName]);
 
@@ -324,7 +326,7 @@ foreach ($productionUnits as $u) {
         SELECT COALESCE(SUM(pl.piece_count), 0)
         FROM piece_logs pl
         JOIN workers w ON w.id = pl.worker_id
-        WHERE w.unit = :uname
+        WHERE COALESCE(NULLIF(pl.unit, ''), w.unit) = :uname
     ");
     $uAllTimeStmt->execute([':uname' => $uName]);
     $uAllTime = (int)$uAllTimeStmt->fetchColumn();
@@ -387,7 +389,7 @@ $garmentBreakdown = $garmentBreakdownStmt->fetchAll(PDO::FETCH_ASSOC);
 // =========================================================================
 $historyStmt = $pdo->prepare("
     SELECT pl.id, pl.work_date, pl.shift, pl.material_name, pl.piece_count, pl.created_at, pl.notes,
-           w.id as worker_db_id, w.unique_id, w.name as worker_name, w.unit, w.role
+           w.id as worker_db_id, w.unique_id, w.name as worker_name, COALESCE(NULLIF(pl.unit, ''), w.unit) as unit, w.role
     FROM piece_logs pl
     JOIN workers w ON w.id = pl.worker_id
     $whereSql
@@ -1640,13 +1642,16 @@ body.theme-light .quick-dock-item {
 <div class="dash-toolbar-card">
     <!-- Left Group: Tabbed Date Mode Selector & Dynamic Input -->
     <div class="toolbar-left-group">
-        <!-- Mode Tabs: Day, Month, Year, All-Time -->
+        <!-- Mode Tabs: Day, Month, Custom Range, Year, All-Time -->
         <div class="date-pill-tabs" role="tablist">
             <button type="button" class="date-pill-tab <?= ($currentDateMode === 'day') ? 'active' : '' ?>" onclick="switchDateMode('day')">
                 <i class="fa-solid fa-calendar-day"></i> Day
             </button>
             <button type="button" class="date-pill-tab <?= ($currentDateMode === 'month') ? 'active' : '' ?>" onclick="switchDateMode('month')">
                 <i class="fa-solid fa-calendar"></i> Month
+            </button>
+            <button type="button" class="date-pill-tab <?= ($currentDateMode === 'range') ? 'active' : '' ?>" onclick="switchDateMode('range')">
+                <i class="fa-solid fa-calendar-week"></i> Custom Range
             </button>
             <button type="button" class="date-pill-tab <?= ($currentDateMode === 'year') ? 'active' : '' ?>" onclick="switchDateMode('year')">
                 <i class="fa-solid fa-calendar-days"></i> Year
@@ -1687,6 +1692,46 @@ body.theme-light .quick-dock-item {
                 <div class="compact-picker-wrap" title="Select specific month">
                     <i class="fa-solid fa-calendar text-cyan"></i>
                     <input type="month" id="monthInput" value="<?= htmlspecialchars($paramMonth ?: $thisMonthStr) ?>" onchange="submitMonthFilter(this.value)">
+                </div>
+            </div>
+
+            <!-- CUSTOM / MULTI-MONTH RANGE MODE -->
+            <div class="date-mode-panel <?= ($currentDateMode === 'range') ? 'active' : '' ?>" id="panel-range">
+                <div class="preset-pill-group">
+                    <?php
+                    $last2MonthsStart = date('Y-m-01', strtotime('-1 month'));
+                    $last2MonthsEnd   = date('Y-m-t');
+                    $last3MonthsStart = date('Y-m-01', strtotime('-2 months'));
+                    $last3MonthsEnd   = date('Y-m-t');
+                    $last30DaysStart  = date('Y-m-d', strtotime('-30 days'));
+                    ?>
+                    <a href="dashboard.php?from_date=<?= $last2MonthsStart ?>&to_date=<?= $last2MonthsEnd ?><?= !empty($paramUnit) ? '&unit=' . urlencode($paramUnit) : '' ?><?= !empty($paramShift) ? '&shift=' . urlencode($paramShift) : '' ?>" 
+                       class="preset-pill <?= ($paramFromDate === $last2MonthsStart && $paramToDate === $last2MonthsEnd) ? 'active' : '' ?>"
+                       title="Continuous 2 Months (<?= date('M', strtotime($last2MonthsStart)) ?> to <?= date('M Y', strtotime($last2MonthsEnd)) ?>)">
+                        <i class="fa-solid fa-calendar-check text-cyan"></i> Last 2 Months
+                    </a>
+                    <a href="dashboard.php?from_date=<?= $last3MonthsStart ?>&to_date=<?= $last3MonthsEnd ?><?= !empty($paramUnit) ? '&unit=' . urlencode($paramUnit) : '' ?><?= !empty($paramShift) ? '&shift=' . urlencode($paramShift) : '' ?>" 
+                       class="preset-pill <?= ($paramFromDate === $last3MonthsStart && $paramToDate === $last3MonthsEnd) ? 'active' : '' ?>"
+                       title="Continuous 3 Months (<?= date('M', strtotime($last3MonthsStart)) ?> to <?= date('M Y', strtotime($last3MonthsEnd)) ?>)">
+                        <i class="fa-solid fa-calendar-days text-emerald"></i> Last 3 Months
+                    </a>
+                    <a href="dashboard.php?from_date=<?= $last30DaysStart ?>&to_date=<?= $todayDate ?><?= !empty($paramUnit) ? '&unit=' . urlencode($paramUnit) : '' ?><?= !empty($paramShift) ? '&shift=' . urlencode($paramShift) : '' ?>" 
+                       class="preset-pill <?= ($paramFromDate === $last30DaysStart && $paramToDate === $todayDate) ? 'active' : '' ?>">
+                        Last 30 Days
+                    </a>
+                </div>
+                <div style="display: inline-flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+                    <div class="compact-picker-wrap" title="From Date">
+                        <span style="font-size: 0.72rem; color: var(--text-muted); font-weight: 700;">From:</span>
+                        <input type="date" id="rangeFromInput" value="<?= htmlspecialchars($paramFromDate ?: date('Y-m-01', strtotime('-2 months'))) ?>">
+                    </div>
+                    <div class="compact-picker-wrap" title="To Date">
+                        <span style="font-size: 0.72rem; color: var(--text-muted); font-weight: 700;">To:</span>
+                        <input type="date" id="rangeToInput" value="<?= htmlspecialchars($paramToDate ?: $todayDate) ?>">
+                    </div>
+                    <button type="button" class="btn btn-sm btn-primary" onclick="submitRangeFilter()" style="padding: 0.35rem 0.85rem; font-size: 0.82rem; font-weight: 700; border-radius: var(--radius-sm); display: inline-flex; align-items: center; gap: 0.35rem;">
+                        <i class="fa-solid fa-filter"></i> Apply
+                    </button>
                 </div>
             </div>
 
@@ -1918,17 +1963,20 @@ body.theme-light .quick-dock-item {
 const activeDateMode = '<?= $currentDateMode ?>';
 
 function switchDateMode(mode) {
-    if (mode === activeDateMode) {
+    if (mode === 'range' || mode === activeDateMode) {
         document.querySelectorAll('.date-pill-tab').forEach(tab => {
             tab.classList.toggle('active', tab.getAttribute('onclick') && tab.getAttribute('onclick').includes("'" + mode + "'"));
         });
         document.querySelectorAll('.date-mode-panel').forEach(panel => {
             panel.classList.toggle('active', panel.id === 'panel-' + mode);
         });
-        return;
+        if (mode === 'range' && mode !== activeDateMode) {
+            return;
+        }
     }
 
     const url = new URL(window.location.href);
+    url.searchParams.delete('period');
     url.searchParams.delete('date');
     url.searchParams.delete('month');
     url.searchParams.delete('year');
@@ -1947,12 +1995,35 @@ function switchDateMode(mode) {
     window.location.href = url.toString();
 }
 
+function submitRangeFilter() {
+    const fromVal = document.getElementById('rangeFromInput')?.value;
+    const toVal = document.getElementById('rangeToInput')?.value;
+    if (!fromVal || !toVal) {
+        alert('Please select both From Date and To Date');
+        return;
+    }
+    if (fromVal > toVal) {
+        alert('From Date cannot be later than To Date');
+        return;
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.delete('period');
+    url.searchParams.delete('date');
+    url.searchParams.delete('month');
+    url.searchParams.delete('year');
+    url.searchParams.set('from_date', fromVal);
+    url.searchParams.set('to_date', toVal);
+    window.location.href = url.toString();
+}
+
 function submitDateFilter(val) {
     if (!val) return;
     const url = new URL(window.location.href);
     url.searchParams.delete('period');
     url.searchParams.delete('month');
     url.searchParams.delete('year');
+    url.searchParams.delete('from_date');
+    url.searchParams.delete('to_date');
     url.searchParams.set('date', val);
     window.location.href = url.toString();
 }
@@ -1963,6 +2034,8 @@ function submitMonthFilter(val) {
     url.searchParams.delete('period');
     url.searchParams.delete('date');
     url.searchParams.delete('year');
+    url.searchParams.delete('from_date');
+    url.searchParams.delete('to_date');
     url.searchParams.set('month', val);
     window.location.href = url.toString();
 }
@@ -1973,6 +2046,8 @@ function submitYearFilter(val) {
     url.searchParams.delete('period');
     url.searchParams.delete('date');
     url.searchParams.delete('month');
+    url.searchParams.delete('from_date');
+    url.searchParams.delete('to_date');
     url.searchParams.set('year', val);
     window.location.href = url.toString();
 }
@@ -1982,6 +2057,8 @@ function submitPeriodAll() {
     url.searchParams.delete('date');
     url.searchParams.delete('month');
     url.searchParams.delete('year');
+    url.searchParams.delete('from_date');
+    url.searchParams.delete('to_date');
     url.searchParams.set('period', 'all');
     window.location.href = url.toString();
 }

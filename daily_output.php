@@ -189,7 +189,7 @@ foreach ($todayLogs as $l) {
 }
 
 // Fetch active 3-tier categories added by admin only
-$catStmt = $pdo->query("SELECT id, category_name, subcategory_name, sub_subcategory_name FROM garment_categories WHERE status = 'Active' ORDER BY category_name ASC, subcategory_name ASC, sub_subcategory_name ASC");
+$catStmt = $pdo->query("SELECT id, category_name, subcategory_name, sub_subcategory_name, stitch_time_seconds FROM garment_categories WHERE status = 'Active' ORDER BY category_name ASC, subcategory_name ASC, sub_subcategory_name ASC");
 $garmentTree = [];
 $adminCategoryChips = [];
 $adminSubcategoryChips = [];
@@ -207,47 +207,64 @@ $catPalette = [
 ];
 $palIdx = 0;
 
-// Fetch active work assignment for selected worker
-$workerAssignment = null;
+// Fetch all active work assignments for selected worker
+$workerAssignments = [];
+$assignedCategoryNames = [];
 if ($selectedWorkerId > 0) {
     try {
         $assignStmt = $pdo->prepare("
             SELECT * FROM worker_work_assignments 
             WHERE worker_id = :wid AND assigned_date = :adate AND status = 'Active' 
-            ORDER BY id DESC LIMIT 1
+            ORDER BY id ASC
         ");
         $assignStmt->execute([
             ':wid' => $selectedWorkerId,
             ':adate' => $selectedDate
         ]);
-        $workerAssignment = $assignStmt->fetch(PDO::FETCH_ASSOC);
+        $workerAssignments = $assignStmt->fetchAll(PDO::FETCH_ASSOC);
 
-        if (!$workerAssignment) {
+        if (empty($workerAssignments)) {
             $assignStmt2 = $pdo->prepare("
                 SELECT * FROM worker_work_assignments 
                 WHERE worker_id = :wid AND status = 'Active' 
-                ORDER BY id DESC LIMIT 1
+                ORDER BY id DESC LIMIT 10
             ");
             $assignStmt2->execute([':wid' => $selectedWorkerId]);
-            $workerAssignment = $assignStmt2->fetch(PDO::FETCH_ASSOC);
+            $workerAssignments = $assignStmt2->fetchAll(PDO::FETCH_ASSOC);
         }
 
-        if (!$workerAssignment && !empty($worker['assigned_category_id'])) {
+        foreach ($workerAssignments as $wa) {
+            if (!empty($wa['category_name'])) {
+                $cClean = trim($wa['category_name']);
+                $assignedCategoryNames[strtolower($cClean)] = $cClean;
+            }
+        }
+
+        if (empty($assignedCategoryNames) && !empty($worker['assigned_category_id'])) {
             $cStmt = $pdo->prepare("SELECT * FROM garment_categories WHERE id = :cid LIMIT 1");
             $cStmt->execute([':cid' => (int)$worker['assigned_category_id']]);
             $cRow = $cStmt->fetch(PDO::FETCH_ASSOC);
-            if ($cRow) {
-                $workerAssignment = [
-                    'category_id' => $cRow['id'],
-                    'category_name' => $cRow['category_name'],
-                    'subcategory_name' => $cRow['subcategory_name'],
-                    'sub_subcategory_name' => $cRow['sub_subcategory_name'] ?? ''
-                ];
+            if ($cRow && !empty($cRow['category_name'])) {
+                $cClean = trim($cRow['category_name']);
+                $assignedCategoryNames[strtolower($cClean)] = $cClean;
+                $workerAssignments[] = $cRow;
+            }
+        }
+
+        if (empty($assignedCategoryNames) && !empty($worker['assigned_work'])) {
+            $chunks = preg_split('/[,|]/', $worker['assigned_work']);
+            foreach ($chunks as $chunk) {
+                $catPart = trim(explode('-', $chunk)[0] ?? '');
+                if (!empty($catPart)) {
+                    $assignedCategoryNames[strtolower($catPart)] = $catPart;
+                }
             }
         }
     } catch (Exception $e) {}
 }
 
+$workerAssignment = !empty($workerAssignments) ? $workerAssignments[0] : null;
+$hasAssignedWork = !empty($assignedCategoryNames);
 $workerAssignedSubcategories = [];
 
 while ($catRow = $catStmt->fetch(PDO::FETCH_ASSOC)) {
@@ -305,15 +322,15 @@ while ($catRow = $catStmt->fetch(PDO::FETCH_ASSOC)) {
                 'category_name' => $c,
                 'garment_type' => $subsub,
                 'icon' => $sIcon,
-                'color' => $sCol
+                'color' => $sCol,
+                'stitch_time_seconds' => (int)($catRow['stitch_time_seconds'] ?? 0)
             ];
             $adminSubcategoryChips[$sKey] = $subChipItem;
 
-            if ($workerAssignment && (
-                strcasecmp($workerAssignment['category_name'], $c) === 0 || 
-                strcasecmp($workerAssignment['subcategory_name'], $s) === 0
-            )) {
-                $workerAssignedSubcategories[$sKey] = $subChipItem;
+            if ($hasAssignedWork) {
+                if (isset($assignedCategoryNames[strtolower($c)])) {
+                    $workerAssignedSubcategories[$sKey] = $subChipItem;
+                }
             }
         }
     }
@@ -321,7 +338,6 @@ while ($catRow = $catStmt->fetch(PDO::FETCH_ASSOC)) {
 
 // User role check (operator/worker or non-admin)
 $isUserRole = ($currentUser && $currentUser['role'] !== 'admin');
-$hasAssignedWork = !empty($workerAssignment);
 $showSubcategoriesOnly = $isUserRole || $hasAssignedWork;
 
 if ($showSubcategoriesOnly) {
@@ -348,6 +364,7 @@ window.isUserRole = <?= json_encode($isUserRole) ?>;
 window.hasAssignedWork = <?= json_encode($hasAssignedWork) ?>;
 window.showSubcategoriesOnly = <?= json_encode($showSubcategoriesOnly) ?>;
 window.assignedCategory = <?= json_encode($workerAssignment['category_name'] ?? null) ?>;
+window.assignedCategoryNames = <?= json_encode(array_values($assignedCategoryNames)) ?>;
 window.assignedSubcategory = <?= json_encode($workerAssignment['subcategory_name'] ?? null) ?>;
 window.adminCategoryChips = <?= json_encode(array_values($adminCategoryChips)) ?>;
 window.adminSubcategoryChips = <?= json_encode(array_values($adminSubcategoryChips)) ?>;
@@ -889,10 +906,21 @@ function filterWorkersByUnit(unitName) {
                     <?php endif; ?>
                     <span class="text-cyan font-bold" style="font-size: 0.82rem;"><?= htmlspecialchars($worker['unique_id']) ?></span>
                 </div>
-                <div class="uf-sub-row">
+                <div class="uf-sub-row" style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
                     <span><?= htmlspecialchars($worker['role']) ?></span>
                     <span>•</span>
                     <span class="text-primary font-bold"><?= date('d M Y', strtotime($selectedDate)) ?></span>
+                    <?php if (!empty($workerUnitTotals)): ?>
+                        <span>•</span>
+                        <span style="display: inline-flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;" title="Lifetime Pieces Stored By Production Unit">
+                            <i class="fa-solid fa-industry text-cyan" style="font-size: 0.72rem;"></i>
+                            <?php foreach ($workerUnitTotals as $wut): ?>
+                                <span class="badge-pill" style="font-size: 0.68rem; padding: 0.08rem 0.45rem; background: rgba(6,182,212,0.12); color: #22d3ee; border: 1px solid rgba(6,182,212,0.3); font-weight: 700; border-radius: 9999px;">
+                                    <?= htmlspecialchars($wut['unit_name']) ?>: <?= number_format($wut['unit_pieces']) ?> pcs
+                                </span>
+                            <?php endforeach; ?>
+                        </span>
+                    <?php endif; ?>
                 </div>
             </div>
         </div>
@@ -955,33 +983,29 @@ function filterWorkersByUnit(unitName) {
     <form id="userStitchForm" autocomplete="off" novalidate style="padding: 1.15rem;">
         <input type="hidden" name="worker_id" value="<?= $worker['id'] ?>">
         <input type="hidden" name="work_date" value="<?= htmlspecialchars($selectedDate) ?>">
+        <input type="hidden" name="unit" id="workstationUnitInput" value="<?= htmlspecialchars($worker['unit'] ?: 'Unit 1') ?>">
         <input type="hidden" id="userClothSelect" name="material_name" required>
 
         <!-- STEP 1: Quick Garment / Subcategory Tap Chips -->
         <div style="margin-bottom: 1.25rem;">
             <!-- If worker has assigned work for today, show prominent Assigned Work Banner -->
-            <?php if ($hasAssignedWork && $workerAssignment): ?>
-                <div class="assigned-work-callout" style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.65rem 1rem; margin-bottom: 0.95rem; background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.35); border-radius: var(--radius-md); box-shadow: 0 0 16px rgba(16,185,129,0.12);">
+            <?php if ($hasAssignedWork && !empty($assignedCategoryNames)): ?>
+                <div class="assigned-work-callout" style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.65rem 1rem; margin-bottom: 0.95rem; background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.35); border-radius: var(--radius-md); box-shadow: 0 0 16px rgba(16,185,129,0.12); flex-wrap: wrap;">
                     <div style="display: flex; align-items: center; gap: 0.65rem; font-size: 0.84rem; flex-wrap: wrap;">
                         <span style="display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: rgba(16,185,129,0.2); color: #34d399; font-size: 0.88rem; flex-shrink: 0;">
                             <i class="fa-solid fa-circle-check"></i>
                         </span>
-                        <div>
+                        <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
                             <span style="color: #34d399; font-weight: 700;">Assigned Work for Today:</span>
-                            <span class="badge-pill" style="background: rgba(16,185,129,0.2); color: #34d399; font-weight: 700; margin-left: 0.35rem; border: 1px solid rgba(16,185,129,0.4);">
-                                <i class="fa-solid fa-shirt"></i> <?= htmlspecialchars($workerAssignment['category_name']) ?>
-                            </span>
-                            <?php if (!empty($workerAssignment['subcategory_name'])): ?>
-                                <span style="color: var(--text-muted); margin: 0 0.3rem;">›</span>
-                                <strong style="color: #fff; font-size: 0.88rem;"><?= htmlspecialchars($workerAssignment['subcategory_name']) ?></strong>
-                            <?php endif; ?>
-                            <?php if (!empty($workerAssignment['sub_subcategory_name'])): ?>
-                                <span style="color: var(--text-muted); font-size: 0.78rem; margin-left: 0.25rem;">(<?= htmlspecialchars($workerAssignment['sub_subcategory_name']) ?>)</span>
-                            <?php endif; ?>
+                            <?php foreach ($assignedCategoryNames as $catDisplayName): ?>
+                                <span class="badge-pill" style="background: rgba(16,185,129,0.2); color: #34d399; font-weight: 700; border: 1px solid rgba(16,185,129,0.4); font-size: 0.78rem;">
+                                    <i class="fa-solid fa-shirt"></i> <?= htmlspecialchars($catDisplayName) ?>
+                                </span>
+                            <?php endforeach; ?>
                         </div>
                     </div>
                     <span class="badge-pill" style="font-size: 0.72rem; background: rgba(16,185,129,0.2); color: #34d399; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; border: 1px solid rgba(16,185,129,0.35); flex-shrink: 0;">
-                        <i class="fa-solid fa-bolt"></i> Ready for Stitching
+                        <i class="fa-solid fa-bolt"></i> <?= count($assignedCategoryNames) ?> Assigned Active
                     </span>
                 </div>
             <?php endif; ?>
@@ -1086,7 +1110,12 @@ function filterWorkersByUnit(unitName) {
                         $badgeId = 'chipBadge_' . preg_replace('/[^a-z0-9_]/', '', $gCleanKey);
                         $parentCat = $g['category_name'] ?? '';
                     ?>
-                        <button type="button" class="garment-chip-btn" data-garment="<?= htmlspecialchars($g['name']) ?>" data-category="<?= htmlspecialchars($parentCat) ?>" onclick="selectGarmentChip('<?= htmlspecialchars(addslashes($g['name'])) ?>', '<?= htmlspecialchars(addslashes($parentCat)) ?>')" title="Tap to select <?= htmlspecialchars($g['name']) ?>">
+                        <button type="button" class="garment-chip-btn" 
+                            data-garment="<?= htmlspecialchars($g['name']) ?>" 
+                            data-category="<?= htmlspecialchars($parentCat) ?>" 
+                            data-stitch-time="<?= (int)($g['stitch_time_seconds'] ?? 0) ?>"
+                            onclick="selectGarmentChip('<?= htmlspecialchars(addslashes($g['name'])) ?>', '<?= htmlspecialchars(addslashes($parentCat)) ?>', <?= (int)($g['stitch_time_seconds'] ?? 0) ?>)" 
+                            title="Tap to select <?= htmlspecialchars($g['name']) ?><?= !empty($g['stitch_time_seconds']) ? ' (' . $g['stitch_time_seconds'] . 's piece time)' : '' ?>">
                             <div style="display: flex; align-items: center; gap: 0.5rem; min-width: 0;">
                                 <i class="fa-solid <?= $g['icon'] ?> garment-chip-icon" style="color: <?= $g['color'] ?>;"></i>
                                 <div style="display: flex; flex-direction: column; text-align: left; min-width: 0;">
@@ -1105,12 +1134,17 @@ function filterWorkersByUnit(unitName) {
             </div>
 
             <!-- Active Selected Indicator -->
-            <div id="selectedCategoryBreadcrumb" style="display: none; align-items: center; justify-content: space-between; margin-top: 0.65rem; padding: 0.5rem 0.85rem; background: rgba(6, 182, 212, 0.1); border: 1px solid rgba(6, 182, 212, 0.3); border-radius: var(--radius-sm);">
-                <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <div id="selectedCategoryBreadcrumb" style="display: none; align-items: center; justify-content: space-between; margin-top: 0.65rem; padding: 0.5rem 0.85rem; background: rgba(6, 182, 212, 0.1); border: 1px solid rgba(6, 182, 212, 0.3); border-radius: var(--radius-sm); flex-wrap: wrap; gap: 0.5rem;">
+                <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
                     <i class="fa-solid fa-circle-check text-cyan" style="font-size: 0.9rem;"></i>
                     <span style="font-size: 0.78rem; color: var(--text-muted);">Selected:</span>
                     <strong id="selectedGarmentDisplayName" class="text-cyan" style="font-size: 0.95rem;">--</strong>
                     <span id="breadcrumbText" style="font-size: 0.75rem; color: var(--text-muted);"></span>
+                </div>
+                <!-- Live Category Stitching Time Badge -->
+                <div id="selectedCatTimeBadge" style="display: none; align-items: center; gap: 0.35rem; font-size: 0.78rem; font-weight: 700; color: #fbbf24; background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.4); border-radius: 9999px; padding: 0.15rem 0.65rem;">
+                    <i class="fa-solid fa-stopwatch"></i>
+                    <span>Stitch Cooldown: <strong id="selectedCatTimeVal">0s</strong></span>
                 </div>
             </div>
 
@@ -1169,10 +1203,7 @@ function filterWorkersByUnit(unitName) {
                 <button type="button" class="uf-counter-btn dec-btn" id="userPieceDecBtn" title="Decrease count (-1)">
                     <i class="fa-solid fa-minus"></i>
                 </button>
-                <input type="number" id="userPieceCountInput" name="piece_count" class="uf-counter-input" min="0" step="1" max="50000" value="0" placeholder="0" readonly inputmode="none" tabindex="-1" autocomplete="off" onkeydown="return false;" title="Count increases when you click + or Complete & Save">
-                <button type="button" class="uf-counter-btn inc-btn" id="userPieceIncBtn" title="Increase count (+1)">
-                    <i class="fa-solid fa-plus"></i>
-                </button>
+                <input type="number" id="userPieceCountInput" name="piece_count" class="uf-counter-input" min="0" step="1" max="50000" value="0" placeholder="0" readonly inputmode="none" tabindex="-1" autocomplete="off" onkeydown="return false;" title="Live Piece Count">
             </div>
         </div>
 
@@ -1198,73 +1229,18 @@ function filterWorkersByUnit(unitName) {
             </div>
         </div>
 
-        <!-- STEP 4: Complete (+1) Instant Save Button & Manual Save Button -->
+        <!-- STEP 4: Complete (+1) Instant Save Button -->
         <div class="uf-submit-row">
             <button type="button" class="btn btn-outline" id="userResetFormBtn" title="Reset Counter">
                 <i class="fa-solid fa-rotate-left"></i>
             </button>
 
-            <!-- 1. Complete Button: Click directly increments count & instantly saves piece to DB under user name! -->
-            <button type="button" id="userCompleteBtn" class="btn btn-success uf-submit-btn" style="flex: 2; min-width: 160px; padding: 0.85rem 1.15rem; font-size: 1.02rem; font-weight: 800; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; gap: 0.55rem; box-shadow: 0 4px 14px rgba(16,185,129,0.3); white-space: nowrap;">
+            <!-- Complete Button: Click directly increments count & instantly saves piece to DB under user name! -->
+            <button type="button" id="userCompleteBtn" class="btn btn-success uf-submit-btn" style="flex: 1; padding: 0.85rem 1.15rem; font-size: 1.05rem; font-weight: 800; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; gap: 0.55rem; box-shadow: 0 4px 14px rgba(16,185,129,0.3); white-space: nowrap;">
                 <i class="fa-solid fa-circle-check" id="userCompleteBtnIcon" style="font-size: 1.15rem;"></i>
                 <span id="userCompleteBtnLabel" style="white-space: nowrap;">Complete (+1)</span>
             </button>
-
-            <!-- 2. Save Button: For manual adjustment/batch saving -->
-            <button type="submit" id="userSaveBtn" class="btn btn-primary uf-submit-btn" style="flex: 1; min-width: 110px; padding: 0.85rem 1rem; font-size: 0.92rem; font-weight: 700; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; gap: 0.5rem; box-shadow: 0 4px 14px rgba(59,130,246,0.25); white-space: nowrap; background: linear-gradient(135deg, #2563eb, #1d4ed8); border-color: #3b82f6;">
-                <i class="fa-solid fa-floppy-disk" id="userSaveBtnIcon" style="font-size: 0.95rem;"></i>
-                <span id="userSaveBtnLabel" style="white-space: nowrap;">Save Total</span>
-            </button>
         </div>
-
-        <!-- Stitching Cooldown Bar (Dynamic Duration Admin-Controlled) -->
-        <div id="stitchCooldownContainer" style="display: none; margin-top: 0.65rem; padding: 0.55rem 0.85rem; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.28); border-radius: var(--radius-sm); align-items: center; justify-content: space-between; gap: 0.75rem; font-size: 0.8rem;">
-            <div style="display: flex; align-items: center; gap: 0.45rem; color: #fbbf24; font-weight: 600;">
-                <i class="fa-solid fa-hourglass-half fa-spin text-amber"></i>
-                <span>Stitching Time Limit: Next piece available in <strong id="cooldownSecondsText" style="color: #fff; font-size: 0.88rem;"><?= $stitchingCooldownSeconds ?>s</strong></span>
-            </div>
-            <div style="flex: 1; max-width: 140px; height: 6px; background: rgba(255,255,255,0.12); border-radius: 999px; overflow: hidden;">
-                <div id="cooldownProgressBar" style="width: 100%; height: 100%; background: #fbbf24; transition: width 1s linear;"></div>
-            </div>
-        </div>
-
-        <!-- Admin Waiting Time Control (Visible only to Admin & Supervisor) -->
-        <?php if ($currentUser && in_array($currentUser['role'], ['admin', 'supervisor'])): ?>
-        <div id="adminCooldownWidget" style="margin-top: 0.75rem; padding: 0.65rem 0.85rem; background: rgba(245, 158, 11, 0.06); border: 1px dashed rgba(245, 158, 11, 0.35); border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.65rem;">
-            <div style="display: flex; align-items: center; gap: 0.5rem;">
-                <span class="badge-pill" style="background: rgba(245, 158, 11, 0.18); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.38); font-size: 0.72rem; font-weight: 800;">
-                    <i class="fa-solid fa-sliders"></i> Admin Waiting Time Control
-                </span>
-                <span style="font-size: 0.8rem; color: var(--text-secondary);">
-                    Current Cooldown: <strong id="adminCurrentCooldownDisplay" class="text-amber" style="font-size: 0.9rem;"><?= $stitchingCooldownSeconds ?>s</strong>
-                </span>
-            </div>
-            <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
-                <span style="font-size: 0.72rem; color: var(--text-muted);">Presets:</span>
-                <button type="button" class="btn btn-xs btn-outline admin-cooldown-preset-btn" data-sec="0" style="padding: 0.2rem 0.45rem; font-size: 0.72rem;" title="Instant (0s)">0s</button>
-                <button type="button" class="btn btn-xs btn-outline admin-cooldown-preset-btn" data-sec="5" style="padding: 0.2rem 0.45rem; font-size: 0.72rem;">5s</button>
-                <button type="button" class="btn btn-xs btn-outline admin-cooldown-preset-btn" data-sec="10" style="padding: 0.2rem 0.45rem; font-size: 0.72rem;">10s</button>
-                <button type="button" class="btn btn-xs btn-outline admin-cooldown-preset-btn" data-sec="15" style="padding: 0.2rem 0.45rem; font-size: 0.72rem;">15s</button>
-                <button type="button" class="btn btn-xs btn-outline admin-cooldown-preset-btn" data-sec="30" style="padding: 0.2rem 0.45rem; font-size: 0.72rem;">30s</button>
-                <button type="button" class="btn btn-xs btn-outline admin-cooldown-preset-btn" data-sec="60" style="padding: 0.2rem 0.45rem; font-size: 0.72rem;">60s</button>
-                
-                <div style="display: inline-flex; align-items: center; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: 4px; padding: 1px 3px;">
-                    <button type="button" id="adminCooldownDecBtn" class="btn btn-xs" style="padding: 0.15rem 0.4rem; background: none; border: none; color: var(--text-muted); cursor: pointer;" title="Decrease 5s">
-                        <i class="fa-solid fa-minus" style="font-size: 0.65rem;"></i>
-                    </button>
-                    <input type="number" id="adminCooldownInput" value="<?= $stitchingCooldownSeconds ?>" min="0" max="600" step="1" style="width: 48px; background: transparent; border: none; text-align: center; color: #fff; font-size: 0.8rem; font-weight: 700; outline: none;">
-                    <span style="font-size: 0.7rem; color: var(--text-muted); margin-right: 3px;">s</span>
-                    <button type="button" id="adminCooldownIncBtn" class="btn btn-xs" style="padding: 0.15rem 0.4rem; background: none; border: none; color: var(--text-muted); cursor: pointer;" title="Increase 5s">
-                        <i class="fa-solid fa-plus" style="font-size: 0.65rem;"></i>
-                    </button>
-                </div>
-
-                <button type="button" id="adminSaveCooldownBtn" class="btn btn-xs btn-primary" style="padding: 0.25rem 0.7rem; font-size: 0.75rem; font-weight: 700; background: linear-gradient(135deg, #f59e0b, #d97706); border: none; color: #000;">
-                    <i class="fa-solid fa-check"></i> Save Time
-                </button>
-            </div>
-        </div>
-        <?php endif; ?>
     </form>
 </div>
 
@@ -1460,7 +1436,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const clothStatusBadge = document.getElementById('clothStatusBadge');
     const clothCurrentLoggedCount = document.getElementById('clothCurrentLoggedCount');
 
-    let currentCooldownDuration = <?= (int)$stitchingCooldownSeconds ?>;
+    let currentCooldownDuration = 0;
+    try { localStorage.removeItem('fabriqpro_cooldown_' + currentWorkerId); } catch (e) {}
     let cooldownTimerInterval = null;
     let isCooldownActive = false;
 
@@ -1880,17 +1857,22 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Fast 1-Tap Garment Chip Selection
-    window.selectGarmentChip = function(matName, parentCatName = '') {
+    window.selectGarmentChip = function(matName, parentCatName = '', explicitStitchTime = null) {
         if (!matName) return;
 
-        // 1. Highlight clicked chip
+        // 1. Highlight clicked chip & extract category stitch time
         const allChips = document.querySelectorAll('.garment-chip-btn');
         let foundParentCat = parentCatName;
+        let catStitchTime = (explicitStitchTime !== null && explicitStitchTime !== undefined) ? parseInt(explicitStitchTime) : 0;
+
         allChips.forEach(btn => {
             if (btn.dataset.garment && btn.dataset.garment.toLowerCase() === matName.toLowerCase()) {
                 btn.classList.add('active');
                 if (!foundParentCat && btn.dataset.category) {
                     foundParentCat = btn.dataset.category;
+                }
+                if (!catStitchTime && btn.dataset.stitchTime) {
+                    catStitchTime = parseInt(btn.dataset.stitchTime) || 0;
                 }
             } else {
                 btn.classList.remove('active');
@@ -1901,10 +1883,24 @@ document.addEventListener('DOMContentLoaded', () => {
             foundParentCat = window.assignedCategory;
         }
 
-        // 2. Set hidden cloth select value
+        currentCooldownDuration = catStitchTime;
+
+        // 2. Update category standard time badge in breadcrumb
+        const timeBadge = document.getElementById('selectedCatTimeBadge');
+        const timeVal = document.getElementById('selectedCatTimeVal');
+        if (timeBadge && timeVal) {
+            if (catStitchTime > 0) {
+                timeVal.innerText = catStitchTime + 's';
+                timeBadge.style.display = 'inline-flex';
+            } else {
+                timeBadge.style.display = 'none';
+            }
+        }
+
+        // 3. Set hidden cloth select value
         if (clothSelect) clothSelect.value = matName;
 
-        // 3. Update breadcrumb and active indicator
+        // 4. Update breadcrumb and active indicator
         const displayNameEl = document.getElementById('selectedGarmentDisplayName');
         if (displayNameEl) displayNameEl.innerText = matName;
         if (breadcrumbText) {
@@ -1916,7 +1912,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (breadcrumbBox) breadcrumbBox.style.display = 'flex';
 
-        // 4. Load today's count for this garment & shift
+        // 5. Load today's count for this garment & shift
         const currentShift = userShiftSelect ? userShiftSelect.value : 'Day Shift';
         const existingCount = getMaterialCurrentCount(matName, currentShift);
         if (pieceInput) {
@@ -2010,30 +2006,23 @@ document.addEventListener('DOMContentLoaded', () => {
         const existingCount = parseInt(getMaterialCurrentCount(selectedMat, currentShift)) || 0;
         const currentInBox = parseInt(pieceInput ? pieceInput.value : 0) || 0;
 
-        // Save button state
-        if (saveBtn) {
-            saveBtn.disabled = false;
-            saveBtn.style.opacity = '1';
-            saveBtn.style.cursor = 'pointer';
-            if (saveBtnLabel) {
-                saveBtnLabel.innerText = (currentInBox > existingCount) ? `Save (${currentInBox} pcs)` : `Save`;
-            }
-        }
-
-        // Complete button state (if not on cooldown)
-        if (!isCooldownActive && completeBtn) {
+        // Complete button state
+        if (completeBtn) {
             completeBtn.disabled = false;
             completeBtn.style.opacity = '1';
             completeBtn.style.cursor = 'pointer';
             completeBtn.classList.add('btn-ready-pulse');
-            if (completeBtnLabel) completeBtnLabel.innerText = 'Complete (+1)';
+            const diff = (currentInBox > existingCount) ? (currentInBox - existingCount) : 1;
+            if (completeBtnLabel) {
+                completeBtnLabel.innerText = (diff > 1) ? `Complete (+${diff})` : 'Complete (+1)';
+            }
         }
 
         if (stepperHint) {
             const dateTxt = window.isCurrentDateToday ? "today" : "on " + (window.currentSelectedDate || "this date");
             if (currentInBox > existingCount) {
                 const diff = currentInBox - existingCount;
-                stepperHint.innerHTML = `Saved in DB: <strong class="text-muted">${existingCount} pcs</strong> • Ready to Save: <strong class="text-cyan">+${diff} pcs</strong> (Click Save to store).`;
+                stepperHint.innerHTML = `Saved in DB: <strong class="text-muted">${existingCount} pcs</strong> • Ready to Add: <strong class="text-cyan">+${diff} pcs</strong> (Click Complete).`;
             } else if (existingCount > 0) {
                 stepperHint.innerHTML = `Saved in DB (${dateTxt}): <strong class="text-emerald">${existingCount} pcs</strong>. Click Complete (+1) after stitching.`;
             } else {
@@ -2285,6 +2274,16 @@ document.addEventListener('DOMContentLoaded', () => {
         completeBtn.addEventListener('click', async (e) => {
             e.preventDefault();
 
+            if (isCooldownActive) {
+                const rem = getCooldownRemaining();
+                if (rem > 0) {
+                    if (typeof showToast === 'function') {
+                        showToast(`Please wait ${rem}s cooldown before logging next piece.`, 'warning');
+                    }
+                    return;
+                }
+            }
+
             let materialVal = clothSelect ? clothSelect.value.trim() : '';
             if (materialVal === '__custom__') {
                 materialVal = customClothInput ? customClothInput.value.trim() : '';
@@ -2301,15 +2300,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            // Enforce minimum admin-controlled cooldown between completes
-            const remaining = getCooldownRemaining();
-            if (remaining > 0) {
-                if (typeof showToast === 'function') {
-                    showToast(`⏳ Please wait ${remaining}s before completing next piece (Stitching time limit: ${currentCooldownDuration}s).`, 'warning');
-                }
-                return;
-            }
-
             // Disable button and show saving indicator
             completeBtn.disabled = true;
             if (completeBtnLabel) completeBtnLabel.innerText = 'Saving piece...';
@@ -2318,9 +2308,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const shiftVal = userShiftSelect ? userShiftSelect.value : 'Day Shift';
             const notesVal = document.getElementById('userNotesInput') ? document.getElementById('userNotesInput').value : '';
 
+            const currentInBox = parseInt(pieceInput ? pieceInput.value : 0) || 0;
+            const existingCount = parseInt(getMaterialCurrentCount(materialVal, shiftVal)) || 0;
+            const piecesToAdd = (currentInBox > existingCount) ? (currentInBox - existingCount) : 1;
+
             const formData = new FormData(stitchForm);
             formData.set('material_name', materialVal);
-            formData.set('piece_count', 1);
+            formData.set('piece_count', piecesToAdd);
             formData.set('mode', 'add');
             formData.set('shift', shiftVal);
             formData.set('notes', notesVal);
@@ -2340,7 +2334,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         showToast(`✔ Piece #${data.current_material_count} saved for ${data.worker_name}! (${materialVal})`, 'success', 4000);
                     }
 
-                    // Start dynamic cooldown timer configured by admin
                     if (currentCooldownDuration > 0) {
                         startCooldownTimer(currentCooldownDuration);
                     } else {
@@ -2368,143 +2361,12 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Submit Complete Form via AJAX (For manual adjustment or batch saving)
+    // Submit Complete Form via AJAX
     if (stitchForm) {
-        stitchForm.addEventListener('submit', async (e) => {
+        stitchForm.addEventListener('submit', (e) => {
             e.preventDefault();
-
-            let materialVal = clothSelect ? clothSelect.value.trim() : '';
-            if (materialVal === '__custom__') {
-                materialVal = customClothInput ? customClothInput.value.trim() : '';
-                if (!materialVal) {
-                    if (typeof showToast === 'function') showToast('Please type the custom cloth/garment name.', 'error');
-                    if (customClothInput) customClothInput.focus();
-                    return;
-                }
-            }
-
-            if (!materialVal) {
-                if (tier3Select && tier3Select.value) materialVal = tier3Select.value.trim();
-                else if (tier2Select && tier2Select.value) materialVal = tier2Select.value.trim();
-                else if (tier1Select && tier1Select.value) materialVal = tier1Select.value.trim();
-                if (clothSelect && materialVal) clothSelect.value = materialVal;
-            }
-
-            if (!materialVal) {
-                if (typeof showToast === 'function') showToast('Please select a garment chip above to start.', 'error');
-                return;
-            }
-
-            const shiftVal = userShiftSelect ? userShiftSelect.value : 'Day Shift';
-            const notesVal = document.getElementById('userNotesInput') ? document.getElementById('userNotesInput').value : '';
-
-            const currentInBox = parseInt(pieceInput ? pieceInput.value : 0) || 0;
-            const submitCount = currentInBox;
-            const submitMode = 'set_total';
-
-            if (saveBtnIcon) saveBtnIcon.className = 'fa-solid fa-spinner fa-spin';
-            if (saveBtnLabel) saveBtnLabel.innerText = 'Saving...';
-            if (saveBtn) saveBtn.disabled = true;
-
-            const formData = new FormData(stitchForm);
-            formData.set('material_name', materialVal);
-            formData.set('piece_count', submitCount);
-            formData.set('mode', submitMode);
-            formData.set('shift', shiftVal);
-            formData.set('notes', notesVal);
-            formData.append('action', 'log_pieces');
-
-            try {
-                const res = await fetch('api.php', {
-                    method: 'POST',
-                    body: formData
-                });
-                const data = await res.json();
-
-                if (data.success) {
-                    if (typeof showToast === 'function') {
-                        showToast(`✔ ${data.message}`, 'success', 5000);
-                    }
-                    applyLoggedPieceSuccess(data, materialVal, shiftVal, notesVal);
-                } else {
-                    if (typeof showToast === 'function') showToast(data.message || 'Failed to save piece count.', 'error');
-                }
-            } catch (err) {
-                if (typeof showToast === 'function') showToast('Network error while saving.', 'error');
-                console.error(err);
-            } finally {
-                if (saveBtn) saveBtn.disabled = false;
-                if (saveBtnIcon) saveBtnIcon.className = 'fa-solid fa-floppy-disk';
-                updateBtn();
-            }
-        });
-    }
-
-    // Admin Waiting Time Control (Presets, Steppers, & Save)
-    const adminCooldownInput = document.getElementById('adminCooldownInput');
-    const adminCooldownDisplay = document.getElementById('adminCurrentCooldownDisplay');
-    const adminSaveCooldownBtn = document.getElementById('adminSaveCooldownBtn');
-    const adminCooldownDecBtn = document.getElementById('adminCooldownDecBtn');
-    const adminCooldownIncBtn = document.getElementById('adminCooldownIncBtn');
-
-    if (adminCooldownDecBtn && adminCooldownInput) {
-        adminCooldownDecBtn.addEventListener('click', () => {
-            let val = parseInt(adminCooldownInput.value) || 0;
-            adminCooldownInput.value = Math.max(0, val - 5);
-        });
-    }
-
-    if (adminCooldownIncBtn && adminCooldownInput) {
-        adminCooldownIncBtn.addEventListener('click', () => {
-            let val = parseInt(adminCooldownInput.value) || 0;
-            adminCooldownInput.value = Math.min(600, val + 5);
-        });
-    }
-
-    document.querySelectorAll('.admin-cooldown-preset-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const sec = parseInt(btn.dataset.sec) || 0;
-            if (adminCooldownInput) adminCooldownInput.value = sec;
-            if (adminSaveCooldownBtn) adminSaveCooldownBtn.click();
-        });
-    });
-
-    if (adminSaveCooldownBtn && adminCooldownInput) {
-        adminSaveCooldownBtn.addEventListener('click', async () => {
-            const sec = Math.max(0, parseInt(adminCooldownInput.value) || 0);
-            adminSaveCooldownBtn.disabled = true;
-            adminSaveCooldownBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
-
-            try {
-                const res = await fetch('api.php', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        action: 'update_cooldown_settings',
-                        cooldown_seconds: sec
-                    })
-                });
-                const data = await res.json();
-                if (data.success) {
-                    currentCooldownDuration = sec;
-                    if (adminCooldownDisplay) adminCooldownDisplay.innerText = sec + 's';
-                    if (cooldownSecondsText) cooldownSecondsText.innerText = sec + 's';
-                    if (typeof showToast === 'function') {
-                        showToast(`✔ Waiting time updated to ${sec}s!`, 'success');
-                    }
-                } else {
-                    if (typeof showToast === 'function') {
-                        showToast(data.message || 'Failed to update waiting time.', 'error');
-                    }
-                }
-            } catch (err) {
-                console.error(err);
-                if (typeof showToast === 'function') {
-                    showToast('Network error while saving waiting time.', 'error');
-                }
-            } finally {
-                adminSaveCooldownBtn.disabled = false;
-                adminSaveCooldownBtn.innerHTML = '<i class="fa-solid fa-check"></i> Save Time';
+            if (completeBtn && !completeBtn.disabled) {
+                completeBtn.click();
             }
         });
     }

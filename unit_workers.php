@@ -82,6 +82,7 @@ $workersStmt = $pdo->prepare("
         (SELECT COUNT(*) FROM piece_logs WHERE worker_id = w.id) as total_entries,
         (SELECT material_name FROM piece_logs WHERE worker_id = w.id ORDER BY id DESC LIMIT 1) as latest_material,
         (SELECT last_login FROM users WHERE LOWER(username) = LOWER(w.unique_id) OR LOWER(full_name) = LOWER(w.name) LIMIT 1) as user_last_login,
+        (SELECT GROUP_CONCAT(DISTINCT category_name SEPARATOR ', ') FROM worker_work_assignments WHERE worker_id = w.id AND assigned_date = CURDATE() AND status = 'Active') as today_assigned_cats,
         (SELECT category_name FROM worker_work_assignments WHERE worker_id = w.id AND assigned_date = CURDATE() ORDER BY id DESC LIMIT 1) as today_assigned_cat,
         (SELECT subcategory_name FROM worker_work_assignments WHERE worker_id = w.id AND assigned_date = CURDATE() ORDER BY id DESC LIMIT 1) as today_assigned_subcat,
         (SELECT sub_subcategory_name FROM worker_work_assignments WHERE worker_id = w.id AND assigned_date = CURDATE() ORDER BY id DESC LIMIT 1) as today_assigned_subsub
@@ -143,11 +144,15 @@ foreach ($workersList as &$w) {
     }
 
     // Current assigned work
-    $assignedParts = array_filter([$w['today_assigned_cat'] ?? '', $w['today_assigned_subcat'] ?? '', $w['today_assigned_subsub'] ?? '']);
-    if (!empty($assignedParts)) {
-        $w['active_assignment'] = implode(' - ', $assignedParts);
+    if (!empty($w['today_assigned_cats'])) {
+        $w['active_assignment'] = $w['today_assigned_cats'];
     } else {
-        $w['active_assignment'] = !empty($w['assigned_work']) ? $w['assigned_work'] : '';
+        $assignedParts = array_filter([$w['today_assigned_cat'] ?? '', $w['today_assigned_subcat'] ?? '', $w['today_assigned_subsub'] ?? '']);
+        if (!empty($assignedParts)) {
+            $w['active_assignment'] = implode(' - ', $assignedParts);
+        } else {
+            $w['active_assignment'] = !empty($w['assigned_work']) ? $w['assigned_work'] : '';
+        }
     }
 }
 unset($w);
@@ -312,6 +317,8 @@ include __DIR__ . '/includes/header.php';
     gap: 0.65rem;
     position: relative;
     overflow: hidden;
+    cursor: pointer;
+    user-select: none;
 }
 .assign-cat-card::before {
     content: '';
@@ -331,13 +338,38 @@ include __DIR__ . '/includes/header.php';
 .assign-cat-card:hover::before {
     opacity: 1;
 }
-.assign-cat-card.is-currently-assigned {
+.assign-cat-card.is-selected {
     border-color: #10b981 !important;
-    background: rgba(16,185,129,0.12) !important;
-    box-shadow: 0 0 18px rgba(16,185,129,0.25) !important;
+    background: rgba(16,185,129,0.16) !important;
+    box-shadow: 0 0 20px rgba(16,185,129,0.35) !important;
 }
-.assign-cat-card.is-currently-assigned::before {
+.assign-cat-card.is-selected::before {
     opacity: 1;
+}
+.cat-card-check-box {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    border: 1.5px solid rgba(255,255,255,0.25);
+    background: rgba(0,0,0,0.3);
+    color: transparent;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.72rem;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+}
+.assign-cat-card.is-selected .cat-card-check-box {
+    border-color: #10b981;
+    background: #10b981;
+    color: #fff;
+    box-shadow: 0 0 10px rgba(16,185,129,0.5);
+}
+.btn-select-cat.is-selected {
+    background: #10b981 !important;
+    border-color: #10b981 !important;
+    color: #fff !important;
 }
 </style>
 
@@ -699,13 +731,23 @@ include __DIR__ . '/includes/header.php';
                 </div>
             </div>
 
-            <!-- Categories Filter & Search Box -->
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem;">
-                <h4 style="font-size: 0.92rem; font-weight: 700; color: #fff; margin: 0; display: flex; align-items: center; gap: 0.45rem;">
-                    <i class="fa-solid fa-layer-group text-cyan"></i> Select Production Category
-                    <span class="badge-pill" style="font-size: 0.7rem;"><?= count($activeGarmentCategories) ?> Categories Available</span>
-                </h4>
-                <div class="search-input-wrapper" style="min-width: 220px; max-width: 280px;">
+            <!-- Categories Multi-Selection Toolbar & Search Box -->
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.85rem;">
+                <div style="display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap;">
+                    <h4 style="font-size: 0.92rem; font-weight: 700; color: #fff; margin: 0; display: flex; align-items: center; gap: 0.45rem;">
+                        <i class="fa-solid fa-layer-group text-cyan"></i> Select Production Categories
+                    </h4>
+                    <span class="badge-pill unit-emerald-pill" id="selectedCatCounterBadge" style="font-size: 0.75rem; font-weight: 700;">
+                        <i class="fa-solid fa-check-double"></i> <span id="selectedCatCountText">0 Selected</span>
+                    </span>
+                    <button type="button" class="btn btn-outline btn-xs" onclick="selectAllCategories()" style="font-size: 0.72rem; padding: 0.18rem 0.55rem; color: #38bdf8;">
+                        Select All
+                    </button>
+                    <button type="button" class="btn btn-outline btn-xs" onclick="clearSelectedCategories()" style="font-size: 0.72rem; padding: 0.18rem 0.55rem; color: #f43f5e;">
+                        Clear
+                    </button>
+                </div>
+                <div class="search-input-wrapper" style="min-width: 200px; max-width: 260px;">
                     <i class="fa-solid fa-magnifying-glass"></i>
                     <input type="text" id="assignCatSearchInput" class="form-control" placeholder="Search categories..." style="height: 34px; font-size: 0.78rem;">
                 </div>
@@ -726,11 +768,13 @@ include __DIR__ . '/includes/header.php';
                         $comboKey = $cat['category_name'] . ($sub ? ' - ' . $sub : '') . ($subsub ? ' - ' . $subsub : '');
                     ?>
                         <div class="assign-cat-card" 
+                             id="assignCard_<?= (int)$cat['id'] ?>"
                              data-cat-id="<?= (int)$cat['id'] ?>"
                              data-cat-name="<?= htmlspecialchars($cat['category_name']) ?>"
                              data-subcat-name="<?= htmlspecialchars($cat['subcategory_name']) ?>"
                              data-subsub-name="<?= htmlspecialchars($cat['sub_subcategory_name'] ?? '') ?>"
-                             data-search="<?= strtolower(htmlspecialchars($comboKey)) ?>">
+                             data-search="<?= strtolower(htmlspecialchars($comboKey)) ?>"
+                             onclick="toggleCategoryCardSelection(<?= (int)$cat['id'] ?>)">
                             <div>
                                 <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.35rem;">
                                     <div style="display: flex; align-items: center; gap: 0.45rem;">
@@ -739,7 +783,9 @@ include __DIR__ . '/includes/header.php';
                                         </div>
                                         <strong style="color: #fff; font-size: 0.9rem;"><?= $fullTitle ?></strong>
                                     </div>
-                                    <span class="badge-pill unit-emerald-pill" style="font-size: 0.65rem; padding: 0.08rem 0.35rem;">Active</span>
+                                    <div class="cat-card-check-box" id="catCheck_<?= (int)$cat['id'] ?>">
+                                        <i class="fa-solid fa-check"></i>
+                                    </div>
                                 </div>
                                 <div style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.2rem;">
                                     <i class="fa-solid fa-tag text-cyan" style="font-size: 0.68rem;"></i> <?= $sub ?>
@@ -753,9 +799,10 @@ include __DIR__ . '/includes/header.php';
 
                             <button type="button" 
                                     class="btn btn-outline btn-sm btn-select-cat" 
-                                    onclick="executeAssignCategory(<?= (int)$cat['id'] ?>, '<?= htmlspecialchars(addslashes($cat['category_name'])) ?>', '<?= htmlspecialchars(addslashes($cat['subcategory_name'])) ?>', '<?= htmlspecialchars(addslashes($cat['sub_subcategory_name'] ?? '')) ?>')"
+                                    id="catSelectBtn_<?= (int)$cat['id'] ?>"
+                                    onclick="event.stopPropagation(); toggleCategoryCardSelection(<?= (int)$cat['id'] ?>)"
                                     style="width: 100%; font-size: 0.75rem; padding: 0.32rem 0.5rem; justify-content: center;">
-                                <i class="fa-solid fa-check"></i> Assign Category
+                                <i class="fa-solid fa-plus"></i> Select
                             </button>
                         </div>
                     <?php endforeach; ?>
@@ -771,13 +818,18 @@ include __DIR__ . '/includes/header.php';
             </div>
         </div>
 
-        <div class="modal-footer" style="border-top: 1px solid rgba(255,255,255,0.08); padding: 0.85rem 1.4rem; display: flex; justify-content: space-between; align-items: center;">
+        <div class="modal-footer" style="border-top: 1px solid rgba(255,255,255,0.08); padding: 0.85rem 1.4rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;">
             <span class="text-muted" style="font-size: 0.75rem;">
-                <i class="fa-solid fa-circle-info text-cyan"></i> Assignment updates worker profile &amp; workstation.
+                <i class="fa-solid fa-circle-info text-cyan"></i> Multi-select categories for operator. Workstation will show subcategories for all selected.
             </span>
-            <button type="button" class="btn btn-outline btn-sm" onclick="closeAssignWorkModal()">
-                Close
-            </button>
+            <div style="display: flex; align-items: center; gap: 0.65rem;">
+                <button type="button" class="btn btn-outline btn-sm" onclick="closeAssignWorkModal()">
+                    Close
+                </button>
+                <button type="button" class="btn btn-primary btn-sm" id="btnSaveCategoryAssignments" onclick="saveSelectedCategoryAssignments()" style="padding: 0.45rem 1.35rem; font-weight: 700; background: linear-gradient(135deg, #10b981, #059669); border: none; box-shadow: 0 4px 14px rgba(16,185,129,0.35); display: inline-flex; align-items: center; gap: 0.45rem;">
+                    <i class="fa-solid fa-floppy-disk"></i> Save Assignment
+                </button>
+            </div>
         </div>
     </div>
 </div>
@@ -1367,6 +1419,63 @@ async function quickToggleWorkerActive(workerId) {
     }
 }
 
+let selectedCategoryIds = new Set();
+
+function updateSelectedCategoriesCount() {
+    const count = selectedCategoryIds.size;
+    const txt = document.getElementById('selectedCatCountText');
+    if (txt) {
+        txt.innerText = count + (count === 1 ? ' Category Selected' : ' Categories Selected');
+    }
+}
+
+function toggleCategoryCardSelection(catId) {
+    const card = document.getElementById('assignCard_' + catId);
+    const btn = document.getElementById('catSelectBtn_' + catId);
+    if (!card) return;
+
+    if (selectedCategoryIds.has(catId)) {
+        selectedCategoryIds.delete(catId);
+        card.classList.remove('is-selected');
+        if (btn) {
+            btn.className = 'btn btn-outline btn-sm btn-select-cat';
+            btn.innerHTML = '<i class="fa-solid fa-plus"></i> Select';
+        }
+    } else {
+        selectedCategoryIds.add(catId);
+        card.classList.add('is-selected');
+        if (btn) {
+            btn.className = 'btn btn-primary btn-sm btn-select-cat is-selected';
+            btn.innerHTML = '<i class="fa-solid fa-check"></i> Selected';
+        }
+    }
+    updateSelectedCategoriesCount();
+}
+
+function selectAllCategories() {
+    const visibleCards = document.querySelectorAll('.assign-cat-card');
+    visibleCards.forEach(card => {
+        if (card.style.display !== 'none') {
+            const cid = parseInt(card.getAttribute('data-cat-id'), 10);
+            if (cid && !selectedCategoryIds.has(cid)) {
+                toggleCategoryCardSelection(cid);
+            }
+        }
+    });
+}
+
+function clearSelectedCategories() {
+    const cards = document.querySelectorAll('.assign-cat-card');
+    cards.forEach(card => {
+        const cid = parseInt(card.getAttribute('data-cat-id'), 10);
+        if (cid && selectedCategoryIds.has(cid)) {
+            toggleCategoryCardSelection(cid);
+        }
+    });
+    selectedCategoryIds.clear();
+    updateSelectedCategoriesCount();
+}
+
 function openAssignWorkModal(workerId, name, uid, unit, role, assignedWork) {
     currentAssignWorkerId = workerId;
     const modal = document.getElementById('assignWorkModal');
@@ -1396,21 +1505,49 @@ function openAssignWorkModal(workerId, name, uid, unit, role, assignedWork) {
         currentWorkEl.innerText = currentWork ? currentWork : 'None (Ready for Assignment)';
     }
 
-    // Highlight card if matches current work
-    const cards = document.querySelectorAll('.assign-cat-card');
-    cards.forEach(card => {
-        const catName = card.getAttribute('data-cat-name') || '';
-        const isMatch = currentWork && currentWork.toLowerCase().includes(catName.toLowerCase());
-        if (isMatch) {
-            card.classList.add('is-currently-assigned');
-        } else {
-            card.classList.remove('is-currently-assigned');
-        }
-    });
-
     const searchInput = document.getElementById('assignCatSearchInput');
     if (searchInput) searchInput.value = '';
+    const cards = document.querySelectorAll('.assign-cat-card');
     cards.forEach(c => c.style.display = '');
+
+    // Reset selection state
+    clearSelectedCategories();
+
+    // Fetch live assigned work for this worker to pre-select checkboxes
+    fetch('api.php?action=get_worker_assigned_work&worker_id=' + workerId)
+        .then(res => res.json())
+        .then(data => {
+            if (data.success && data.assigned_category_names && data.assigned_category_names.length > 0) {
+                const names = data.assigned_category_names.map(n => n.toLowerCase());
+                cards.forEach(card => {
+                    const cname = (card.getAttribute('data-cat-name') || '').toLowerCase();
+                    const cid = parseInt(card.getAttribute('data-cat-id'), 10);
+                    if (names.includes(cname) && cid && !selectedCategoryIds.has(cid)) {
+                        toggleCategoryCardSelection(cid);
+                    }
+                });
+            } else if (currentWork) {
+                cards.forEach(card => {
+                    const cname = (card.getAttribute('data-cat-name') || '').toLowerCase();
+                    const cid = parseInt(card.getAttribute('data-cat-id'), 10);
+                    if (currentWork.toLowerCase().includes(cname) && cid && !selectedCategoryIds.has(cid)) {
+                        toggleCategoryCardSelection(cid);
+                    }
+                });
+            }
+        })
+        .catch(err => {
+            console.warn('Could not fetch active assignments:', err);
+            if (currentWork) {
+                cards.forEach(card => {
+                    const cname = (card.getAttribute('data-cat-name') || '').toLowerCase();
+                    const cid = parseInt(card.getAttribute('data-cat-id'), 10);
+                    if (currentWork.toLowerCase().includes(cname) && cid && !selectedCategoryIds.has(cid)) {
+                        toggleCategoryCardSelection(cid);
+                    }
+                });
+            }
+        });
 
     modal.style.display = 'flex';
 }
@@ -1419,16 +1556,43 @@ function closeAssignWorkModal() {
     const modal = document.getElementById('assignWorkModal');
     if (modal) modal.style.display = 'none';
     currentAssignWorkerId = null;
+    clearSelectedCategories();
 }
 
-async function executeAssignCategory(catId, catName, subcatName, subsubName) {
+async function saveSelectedCategoryAssignments() {
     if (!currentAssignWorkerId) {
         alert('No worker selected for assignment.');
         return;
     }
 
+    if (selectedCategoryIds.size === 0) {
+        if (!confirm('No categories are currently selected. Do you want to clear work assignment for this worker?')) {
+            return;
+        }
+    }
+
+    const categories = [];
+    selectedCategoryIds.forEach(cid => {
+        const card = document.getElementById('assignCard_' + cid);
+        if (card) {
+            categories.push({
+                category_id: cid,
+                category_name: card.getAttribute('data-cat-name') || '',
+                subcategory_name: card.getAttribute('data-subcat-name') || '',
+                sub_subcategory_name: card.getAttribute('data-subsub-name') || ''
+            });
+        }
+    });
+
     const notesInput = document.getElementById('assignModalNotesInput');
     const notes = notesInput ? notesInput.value.trim() : '';
+    const saveBtn = document.getElementById('btnSaveCategoryAssignments');
+    const origHtml = saveBtn ? saveBtn.innerHTML : '';
+
+    if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+    }
 
     try {
         const res = await fetch('api.php?action=assign_worker_category', {
@@ -1436,10 +1600,7 @@ async function executeAssignCategory(catId, catName, subcatName, subsubName) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 worker_id: currentAssignWorkerId,
-                category_id: catId,
-                category_name: catName,
-                subcategory_name: subcatName,
-                sub_subcategory_name: subsubName,
+                categories: categories,
                 notes: notes
             })
         });
@@ -1454,16 +1615,21 @@ async function executeAssignCategory(catId, catName, subcatName, subsubName) {
 
             const assignedTag = document.getElementById('assignedTag_' + currentAssignWorkerId);
             if (assignedTag) {
-                assignedTag.style.display = 'block';
-                assignedTag.innerHTML = `
-                    <span class="badge-pill" style="background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.35); font-size: 0.72rem; display: inline-flex; align-items: center; gap: 0.3rem;" title="Assigned Work Category">
-                        <i class="fa-solid fa-clipboard-check"></i> Work: <strong style="color: #fff;">${data.assigned_work}</strong>
-                    </span>
-                `;
+                if (data.assigned_work) {
+                    assignedTag.style.display = 'block';
+                    assignedTag.innerHTML = `
+                        <span class="badge-pill" style="background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.35); font-size: 0.72rem; display: inline-flex; align-items: center; gap: 0.3rem;" title="Assigned Work Category">
+                            <i class="fa-solid fa-clipboard-check"></i> Work: <strong style="color: #fff;">${data.assigned_work}</strong>
+                        </span>
+                    `;
+                } else {
+                    assignedTag.style.display = 'none';
+                    assignedTag.innerHTML = '';
+                }
             }
 
             const curText = document.getElementById('assignModalCurrentWorkText');
-            if (curText) curText.innerText = data.assigned_work;
+            if (curText) curText.innerText = data.assigned_work || 'None';
 
             if (typeof showToast === 'function') {
                 showToast(data.message, 'success');
@@ -1471,11 +1637,16 @@ async function executeAssignCategory(catId, catName, subcatName, subsubName) {
 
             setTimeout(closeAssignWorkModal, 400);
         } else {
-            alert(data.message || 'Failed to assign work category.');
+            alert(data.message || 'Failed to save category assignment.');
         }
     } catch (err) {
         console.error(err);
-        alert('Server error while assigning work category.');
+        alert('Server error while saving category assignment: ' + err.message);
+    } finally {
+        if (saveBtn) {
+            saveBtn.disabled = false;
+            saveBtn.innerHTML = origHtml;
+        }
     }
 }
 </script>

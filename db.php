@@ -244,6 +244,9 @@ class Database {
         try {
             self::$pdo->exec("ALTER TABLE garment_categories ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'Active' AFTER sub_subcategory_name");
         } catch (Exception $e) {}
+        try {
+            self::$pdo->exec("ALTER TABLE garment_categories ADD COLUMN stitch_time_seconds INT NOT NULL DEFAULT 0 AFTER status");
+        } catch (Exception $e) {}
 
         // Seed initial garment categories if table is empty
         try {

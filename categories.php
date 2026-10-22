@@ -196,6 +196,18 @@ include __DIR__ . '/includes/header.php';
                 <small class="text-muted" style="font-size: 0.73rem;">Leave empty if subcategory is garment</small>
             </div>
 
+            <!-- 4. Category Stitching Time / Workstation Cooldown -->
+            <div class="form-group mb-0">
+                <label class="form-label" for="pageStitchTimeInput" style="font-size: 0.82rem; font-weight: 600; color: #fbbf24;">
+                    <i class="fa-solid fa-stopwatch"></i> 4. Stitching Time (Cooldown)
+                </label>
+                <div style="display: flex; align-items: center; gap: 0.45rem;">
+                    <input type="number" id="pageStitchTimeInput" class="form-control" min="0" max="600" step="1" value="0" placeholder="0" style="font-weight: 700; text-align: center; max-width: 110px;">
+                    <span style="font-size: 0.8rem; color: var(--text-muted); font-weight: 600;">sec</span>
+                </div>
+                <small class="text-muted" style="font-size: 0.73rem;">Waiting time between pieces at workstation</small>
+            </div>
+
             <!-- Submit Button -->
             <div>
                 <button type="submit" id="pageSaveBtn" class="btn btn-primary" style="height: 42px; padding: 0 1.25rem; font-weight: 700; font-size: 0.9rem; white-space: nowrap; display: flex; align-items: center; gap: 0.5rem;">
@@ -329,13 +341,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 };
             }
 
+            const stTime = parseInt(r.stitch_time_seconds, 10) || 0;
+
             if (!directory[cat].subcategories[sub]) {
                 directory[cat].subcategories[sub] = {
                     name: sub,
                     status: status,
+                    stitch_time_seconds: stTime,
                     items: [],
                     rowId: rowId // used if direct garment
                 };
+            } else if (stTime > 0) {
+                directory[cat].subcategories[sub].stitch_time_seconds = stTime;
             }
 
             // If subcategory has active status
@@ -348,7 +365,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 directory[cat].subcategories[sub].items.push({
                     id: rowId,
                     name: subsub,
-                    status: status
+                    status: status,
+                    stitch_time_seconds: stTime
                 });
                 directory[cat].totalGarments++;
             }
@@ -448,6 +466,9 @@ document.addEventListener('DOMContentLoaded', () => {
                                     ? `<span style="font-size: 0.68rem; padding: 0.1rem 0.45rem; border-radius: 4px; background: rgba(16,185,129,0.12); color: #10b981; border: 1px solid rgba(16,185,129,0.25);">Active</span>`
                                     : `<span style="font-size: 0.68rem; padding: 0.1rem 0.45rem; border-radius: 4px; background: rgba(245,158,11,0.12); color: #f59e0b; border: 1px solid rgba(245,158,11,0.25);">Disabled</span>`
                                 }
+                                <span class="badge-pill" style="font-size: 0.68rem; padding: 0.1rem 0.45rem; border-radius: 4px; background: rgba(245,158,11,0.12); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); font-weight: 700;" title="Workstation Stitching Waiting Time (Seconds)">
+                                    <i class="fa-solid fa-stopwatch"></i> ${subObj.stitch_time_seconds > 0 ? (subObj.stitch_time_seconds + 's') : '0s'}
+                                </span>
                             </div>
                             <div style="display: flex; align-items: center; gap: 0.35rem;">
                                 <button type="button" class="btn btn-outline btn-xs btn-toggle-cat" data-type="subcategory" data-cat="${escapeHtml(catName)}" data-sub="${escapeHtml(subName)}" data-status="${isSubActive ? 'Disabled' : 'Active'}" style="font-size: 0.7rem; padding: 0.15rem 0.45rem; color: ${isSubActive ? 'var(--accent-amber)' : 'var(--accent-emerald)'};">
@@ -590,6 +611,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
                             <span style="font-weight: 700; font-size: 0.9rem; color: #a7f3d0; display: flex; align-items: center; gap: 0.45rem;">
                                 <i class="fa-solid fa-tags" style="font-size: 0.8rem; color: #10b981;"></i> ${escapeHtml(subName)}
+                                <span class="badge-pill" style="font-size: 0.68rem; padding: 0.1rem 0.45rem; border-radius: 4px; background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.35); font-weight: 700;" title="Workstation Stitching Waiting Time (Seconds)">
+                                    <i class="fa-solid fa-stopwatch"></i> ${subObj.stitch_time_seconds > 0 ? (subObj.stitch_time_seconds + 's') : '0s'}
+                                </span>
                             </span>
                             <button type="button" class="btn btn-outline btn-xs text-amber btn-toggle-cat" data-type="subcategory" data-cat="${escapeHtml(catName)}" data-sub="${escapeHtml(subName)}" data-status="Disabled" title="Deactivate subcategory" style="font-size: 0.7rem; padding: 0.15rem 0.45rem;">
                                 <i class="fa-solid fa-eye-slash"></i> Disable
@@ -809,6 +833,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const cat = catInput.value.trim();
             const sub = subcatInput.value.trim();
             const subsub = subsubcatInput.value.trim();
+            const stitchTime = parseInt(document.getElementById('pageStitchTimeInput')?.value) || 0;
 
             if (!cat || !sub) return;
 
@@ -822,7 +847,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     body: JSON.stringify({
                         category_name: cat,
                         subcategory_name: sub,
-                        sub_subcategory_name: subsub
+                        sub_subcategory_name: subsub,
+                        stitch_time_seconds: stitchTime
                     })
                 });
                 const data = await res.json();

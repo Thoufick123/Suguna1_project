@@ -60,6 +60,8 @@ $usersQuery = "
         u.role AS system_role,
         u.unit AS user_unit,
         u.created_at AS user_created_at,
+        COALESCE(u.status, 'Active') AS user_status,
+        u.last_login AS user_last_login,
         w.id AS worker_id,
         w.unique_id,
         w.name AS worker_name,
@@ -74,6 +76,11 @@ $usersQuery = "
         w.extra_skills,
         w.total_pieces,
         COALESCE(w.status, 'Active') AS worker_status,
+        w.last_login AS worker_last_login,
+        w.assigned_work,
+        (SELECT GROUP_CONCAT(DISTINCT category_name SEPARATOR ', ') FROM worker_work_assignments WHERE worker_id = w.id AND assigned_date = CURDATE() AND status = 'Active') as today_assigned_cats,
+        w.assigned_category_id,
+        w.assigned_at,
         (SELECT COUNT(*) FROM piece_logs WHERE worker_id = w.id) AS log_count,
         (SELECT MAX(work_date) FROM piece_logs WHERE worker_id = w.id) AS last_active_date
     FROM users u
@@ -87,7 +94,8 @@ $usersQuery = "
 $usersStmt = $pdo->query($usersQuery);
 $allUsers = $usersStmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Precompute dynamic transfer/switched origin for all workers
+// Precompute dynamic transfer/switched origin and today's login status for all users/workers
+$todayDateString = date('Y-m-d');
 foreach ($allUsers as &$u) {
     $u['is_switched'] = false;
     $transFrom = !empty($u['transferred_from']) ? trim($u['transferred_from']) : '';
@@ -109,8 +117,30 @@ foreach ($allUsers as &$u) {
             }
         }
     }
+
+    // Effective login detection (from users table or linked workers table)
+    $effLogin = !empty($u['user_last_login']) ? $u['user_last_login'] : (!empty($u['worker_last_login']) ? $u['worker_last_login'] : null);
+    $u['effective_login'] = $effLogin;
+    $u['is_logged_in_today'] = (!empty($effLogin) && strpos($effLogin, $todayDateString) === 0);
+
+    // Active assigned work check
+    if (!empty($u['today_assigned_cats'])) {
+        $u['assigned_work'] = $u['today_assigned_cats'];
+    }
 }
 unset($u);
+
+// Fetch all active garment categories for work assignment modal
+$activeGarmentCategories = [];
+try {
+    $activeGarmentCategories = $pdo->query("
+        SELECT * FROM garment_categories 
+        WHERE status = 'Active' 
+        ORDER BY category_name ASC, subcategory_name ASC
+    ")->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $activeGarmentCategories = [];
+}
 
 // Fetch all worker category stitching statistics for instant breakdown loading
 $workerCategoryLogs = [];
@@ -218,6 +248,102 @@ include __DIR__ . '/includes/header.php';
 /* ===================================================================
    MODERN USER DIRECTORY DESIGN SYSTEM
    =================================================================== */
+/* Login tick badge for users logged in today */
+.worker-login-tick-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #10b981;
+    font-size: 0.95rem;
+    margin-left: 0.35rem;
+    vertical-align: middle;
+    filter: drop-shadow(0 0 6px rgba(16,185,129,0.7));
+    animation: tickPulse 2.4s infinite ease-in-out;
+}
+
+@keyframes tickPulse {
+    0%, 100% { transform: scale(1); filter: drop-shadow(0 0 4px rgba(16,185,129,0.6)); }
+    50% { transform: scale(1.15); filter: drop-shadow(0 0 10px rgba(16,185,129,0.95)); }
+}
+
+.pulse-emerald-dot {
+    width: 8px;
+    height: 8px;
+    background: #10b981;
+    border-radius: 50%;
+    display: inline-block;
+    box-shadow: 0 0 8px #10b981;
+    animation: pulseGlowEmerald 1.8s infinite;
+}
+
+@keyframes pulseGlowEmerald {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(1.3); }
+}
+
+.btn-assign-work {
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
+    border: 1px solid rgba(16,185,129,0.7) !important;
+    color: #fff !important;
+    font-weight: 700 !important;
+    font-size: 0.76rem !important;
+    padding: 0.35rem 0.68rem !important;
+    border-radius: 6px !important;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    box-shadow: 0 0 14px rgba(16,185,129,0.3) !important;
+    transition: all 0.2s ease !important;
+    cursor: pointer;
+}
+.btn-assign-work:hover {
+    background: linear-gradient(135deg, #059669 0%, #047857 100%) !important;
+    box-shadow: 0 0 18px rgba(16,185,129,0.5) !important;
+    transform: translateY(-1px);
+}
+
+.active-badge-btn {
+    transition: all 0.2s ease;
+}
+.active-badge-btn:hover {
+    filter: brightness(1.15);
+    transform: scale(1.04);
+}
+
+.assign-cat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 0.75rem;
+    max-height: 380px;
+    overflow-y: auto;
+    padding: 0.25rem;
+}
+
+.assign-cat-card {
+    background: rgba(30, 41, 59, 0.75);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px;
+    padding: 0.75rem 0.85rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    text-align: left;
+    position: relative;
+}
+.assign-cat-card:hover {
+    border-color: rgba(16, 185, 129, 0.6);
+    background: rgba(16, 185, 129, 0.08);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 14px rgba(0,0,0,0.3);
+}
+.assign-cat-card.is-currently-assigned {
+    border-color: #10b981;
+    background: rgba(16, 185, 129, 0.15);
+    box-shadow: 0 0 12px rgba(16,185,129,0.25);
+}
+
 .user-dir-header {
     display: flex;
     align-items: center;
@@ -850,9 +976,13 @@ include __DIR__ . '/includes/header.php';
                         $workerId = (int)($user['worker_id'] ?? 0);
                         $userId = (int)$user['user_id'];
                         $workerStatus = !empty($user['worker_status']) ? $user['worker_status'] : 'Active';
-                        $isActive = (strcasecmp($workerStatus, 'Active') === 0);
+                        $userStatus = !empty($user['user_status']) ? $user['user_status'] : 'Active';
+                        $isActive = (strcasecmp($workerStatus, 'Active') === 0 && strcasecmp($userStatus, 'Active') === 0);
                         $isRootAdmin = ($userId === 1 || strcasecmp($user['username'], 'admin') === 0);
                         $uColor = resolveUnitBadgeColor($unitVal);
+                        $effLogin = $user['effective_login'] ?? null;
+                        $isLoggedInToday = !empty($user['is_logged_in_today']);
+                        $assignedWork = !empty($user['assigned_work']) ? $user['assigned_work'] : '';
 
                         // Avatar gradient per role
                         $avatarBg = 'linear-gradient(135deg, #2563eb, #3b82f6)';
@@ -888,6 +1018,9 @@ include __DIR__ . '/includes/header.php';
                             'is_switched' => !empty($user['is_switched']),
                             'transferred_from' => $user['transferred_from'] ?? '',
                             'transfer_type' => $user['transfer_type'] ?? 'Emergency Support',
+                            'is_logged_in_today' => $isLoggedInToday,
+                            'effective_login' => $effLogin,
+                            'assigned_work' => $assignedWork,
                             'categories' => (!empty($workerId) && isset($workerCategoryMap[$workerId])) ? $workerCategoryMap[$workerId] : [],
                             'unit_breakdown' => (!empty($workerId) && isset($workerUnitMap[$workerId])) ? $workerUnitMap[$workerId] : [],
                             'is_admin' => $isRootAdmin
@@ -910,15 +1043,35 @@ include __DIR__ . '/includes/header.php';
                                     <?= $firstLetter ?>
                                 </div>
                                 <div style="min-width: 0;">
-                                    <div class="worker-meta-name" style="font-weight: 700; font-size: 0.92rem; color: #fff; white-space: nowrap;">
-                                        <?= htmlspecialchars($displayName) ?>
+                                    <div class="worker-meta-name" style="font-weight: 700; font-size: 0.92rem; color: #fff; white-space: nowrap; display: flex; align-items: center; gap: 0.35rem;">
+                                        <span id="nameText_<?= $userId ?>_<?= $workerId ?>"><?= htmlspecialchars($displayName) ?></span>
+                                        <?php if ($isLoggedInToday): ?>
+                                            <span class="worker-login-tick-badge" id="nameLoginTick_<?= $userId ?>_<?= $workerId ?>" title="Logged in today: <?= !empty($effLogin) ? date('h:i A', strtotime($effLogin)) : 'Today' ?>">
+                                                <i class="fa-solid fa-circle-check"></i>
+                                            </span>
+                                        <?php endif; ?>
                                     </div>
-                                    <div style="display: flex; align-items: center; gap: 0.35rem; margin-top: 0.15rem; flex-wrap: wrap;">
+                                    <div style="display: flex; align-items: center; gap: 0.35rem; margin-top: 0.2rem; flex-wrap: wrap;">
                                         <span class="badge-pill" style="font-family: monospace; font-size: 0.72rem; padding: 0.05rem 0.35rem; background: rgba(6,182,212,0.08); color: var(--accent-cyan); border: 1px solid rgba(6,182,212,0.25);">
                                             <i class="fa-solid fa-id-badge"></i> <?= htmlspecialchars($user['username']) ?>
                                         </span>
+                                        <!-- Active button right next to registered user name & ID -->
+                                        <button type="button" 
+                                                class="badge-pill active-badge-btn <?= $isActive ? 'is-active' : 'is-inactive' ?>"
+                                                id="nameActiveBtn_<?= $userId ?>_<?= $workerId ?>"
+                                                onclick="toggleUserStatus(<?= $userId ?>, <?= $workerId ?>, '<?= htmlspecialchars(addslashes($user['username'])) ?>')"
+                                                title="Status: <?= $isActive ? 'Active' : 'Inactive' ?> (Click to Toggle)"
+                                                style="cursor: pointer; font-size: 0.7rem; font-weight: 700; padding: 0.1rem 0.5rem; border-radius: 9999px; display: inline-flex; align-items: center; gap: 0.25rem; <?= $isActive ? 'background: rgba(16,185,129,0.18); color: #34d399; border: 1px solid rgba(16,185,129,0.45);' : 'background: rgba(148,163,184,0.12); color: #94a3b8; border: 1px solid rgba(148,163,184,0.25);' ?>">
+                                            <i class="fa-solid <?= $isActive ? 'fa-circle-check' : 'fa-circle-xmark' ?>" id="nameActiveIcon_<?= $userId ?>_<?= $workerId ?>"></i>
+                                            <span id="nameActiveText_<?= $userId ?>_<?= $workerId ?>"><?= $isActive ? 'ACTIVE' : 'INACTIVE' ?></span>
+                                        </button>
                                         <span style="font-size: 0.72rem; color: var(--text-muted);">
                                             <?= htmlspecialchars($designation) ?>
+                                        </span>
+                                    </div>
+                                    <div id="assignedWorkContainer_<?= $userId ?>_<?= $workerId ?>" style="margin-top: 0.35rem; <?= empty($assignedWork) ? 'display: none;' : '' ?>">
+                                        <span class="badge-pill" style="background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.4); font-size: 0.72rem; font-weight: 600; padding: 0.15rem 0.5rem; display: inline-flex; align-items: center; gap: 0.3rem;" title="Assigned Production Category">
+                                            <i class="fa-solid fa-clipboard-check"></i> WORK: <strong style="color: #fff; text-transform: uppercase;" id="assignedWorkText_<?= $userId ?>_<?= $workerId ?>"><?= htmlspecialchars($assignedWork) ?></strong>
                                         </span>
                                     </div>
                                 </div>
@@ -972,17 +1125,33 @@ include __DIR__ . '/includes/header.php';
                             </div>
                         </td>
 
-                        <!-- 5. Status -->
+                        <!-- 5. Status (Interactive Toggle) -->
                         <td style="text-align: center;">
-                            <span class="status-pill status-<?= $isActive ? 'active' : 'inactive' ?>" id="statusPill_<?= $userId ?>_<?= $workerId ?>">
+                            <button type="button" 
+                                class="status-pill status-pill-btn status-<?= $isActive ? 'active' : 'inactive' ?>" 
+                                id="statusPill_<?= $userId ?>_<?= $workerId ?>"
+                                onclick="toggleUserStatus(<?= $userId ?>, <?= $workerId ?>, '<?= htmlspecialchars(addslashes($user['username'])) ?>')"
+                                title="Click to toggle Active / Inactive"
+                                style="cursor: pointer; border: none; font-size: 0.78rem; font-weight: 600; padding: 0.28rem 0.75rem; border-radius: 9999px; display: inline-flex; align-items: center; gap: 0.35rem; transition: all 0.2s ease;">
                                 <span class="status-indicator-dot"></span>
                                 <span id="statusText_<?= $userId ?>_<?= $workerId ?>"><?= $isActive ? 'Active' : 'Inactive' ?></span>
-                            </span>
+                            </button>
                         </td>
 
-                        <!-- 6. Actions: 1) View Details, 2) Edit, 3) Delete, 4) Active|Inactive -->
+                        <!-- 6. Actions: 1) Assign Work (if logged in today), 2) View Details, 3) Edit, 4) Delete -->
                         <td style="text-align: right;">
                             <div class="user-action-group">
+                                <!-- Assign Work Button: ONLY for user logged in today -->
+                                <?php if ($isLoggedInToday): ?>
+                                    <button type="button" 
+                                        class="btn btn-sm btn-assign-work" 
+                                        id="assignWorkBtn_<?= $userId ?>_<?= $workerId ?>"
+                                        onclick="openAssignWorkModal(<?= $workerId ?>, '<?= htmlspecialchars(addslashes($displayName)) ?>', '<?= htmlspecialchars(addslashes($user['username'])) ?>', '<?= htmlspecialchars(addslashes($unitVal)) ?>', '<?= htmlspecialchars(addslashes($designation)) ?>', '<?= htmlspecialchars(addslashes($assignedWork)) ?>', <?= $userId ?>)"
+                                        title="Assign Garment Production Category">
+                                        <i class="fa-solid fa-clipboard-list"></i> Assign Work
+                                    </button>
+                                <?php endif; ?>
+
                                 <!-- 1. View Details Button -->
                                 <button type="button" class="btn-action-view" 
                                     onclick="openUserDetailsModal(<?= htmlspecialchars(json_encode($userRecordJson), ENT_QUOTES, 'UTF-8') ?>)" 
@@ -1009,15 +1178,6 @@ include __DIR__ . '/includes/header.php';
                                         <i class="fa-solid fa-trash-can"></i> Delete
                                     </button>
                                 <?php endif; ?>
-
-                                <!-- 4. Active | Inactive Button -->
-                                <button type="button" class="btn-action-toggle <?= $isActive ? 'is-active' : 'is-inactive' ?>"
-                                    id="toggleBtn_<?= $userId ?>_<?= $workerId ?>"
-                                    onclick="toggleUserStatus(<?= $userId ?>, <?= $workerId ?>, '<?= htmlspecialchars(addslashes($user['username'])) ?>')"
-                                    title="Toggle Active / Inactive Status">
-                                    <i class="fa-solid <?= $isActive ? 'fa-toggle-on' : 'fa-toggle-off' ?>" id="toggleIcon_<?= $userId ?>_<?= $workerId ?>"></i>
-                                    <span id="toggleText_<?= $userId ?>_<?= $workerId ?>"><?= $isActive ? 'Active' : 'Inactive' ?></span>
-                                </button>
                             </div>
                         </td>
                     </tr>
@@ -1041,9 +1201,13 @@ include __DIR__ . '/includes/header.php';
             $workerId = (int)($user['worker_id'] ?? 0);
             $userId = (int)$user['user_id'];
             $workerStatus = !empty($user['worker_status']) ? $user['worker_status'] : 'Active';
-            $isActive = (strcasecmp($workerStatus, 'Active') === 0);
+            $userStatus = !empty($user['user_status']) ? $user['user_status'] : 'Active';
+            $isActive = (strcasecmp($workerStatus, 'Active') === 0 && strcasecmp($userStatus, 'Active') === 0);
             $isRootAdmin = ($userId === 1 || strcasecmp($user['username'], 'admin') === 0);
             $uColor = resolveUnitBadgeColor($unitVal);
+            $effLogin = $user['effective_login'] ?? null;
+            $isLoggedInToday = !empty($user['is_logged_in_today']);
+            $assignedWork = !empty($user['assigned_work']) ? $user['assigned_work'] : '';
 
             $avatarBg = 'linear-gradient(135deg, #2563eb, #3b82f6)';
             if ($sRole === 'admin') $avatarBg = 'linear-gradient(135deg, #9333ea, #c084fc)';
@@ -1070,6 +1234,9 @@ include __DIR__ . '/includes/header.php';
                 'is_switched' => !empty($user['is_switched']),
                 'transferred_from' => $user['transferred_from'] ?? '',
                 'transfer_type' => $user['transfer_type'] ?? 'Emergency Support',
+                'is_logged_in_today' => $isLoggedInToday,
+                'effective_login' => $effLogin,
+                'assigned_work' => $assignedWork,
                 'categories' => (!empty($workerId) && isset($workerCategoryMap[$workerId])) ? $workerCategoryMap[$workerId] : [],
                 'unit_breakdown' => (!empty($workerId) && isset($workerUnitMap[$workerId])) ? $workerUnitMap[$workerId] : [],
                 'is_admin' => $isRootAdmin
@@ -1090,11 +1257,28 @@ include __DIR__ . '/includes/header.php';
                         <?= $firstLetter ?>
                     </div>
                     <div>
-                        <div style="font-weight: 700; font-size: 0.95rem; color: #fff;">
-                            <?= htmlspecialchars($displayName) ?>
+                        <div style="font-weight: 700; font-size: 0.95rem; color: #fff; display: flex; align-items: center; gap: 0.35rem;">
+                            <span id="cardNameText_<?= $userId ?>_<?= $workerId ?>"><?= htmlspecialchars($displayName) ?></span>
+                            <?php if ($isLoggedInToday): ?>
+                                <span class="worker-login-tick-badge" id="cardNameLoginTick_<?= $userId ?>_<?= $workerId ?>" title="Logged in today: <?= !empty($effLogin) ? date('h:i A', strtotime($effLogin)) : 'Today' ?>">
+                                    <i class="fa-solid fa-circle-check"></i>
+                                </span>
+                            <?php endif; ?>
                         </div>
-                        <div style="font-family: monospace; font-size: 0.76rem; color: var(--accent-cyan); margin-top: 0.15rem;">
-                            @<?= htmlspecialchars($user['username']) ?>
+                        <div style="display: flex; align-items: center; gap: 0.35rem; margin-top: 0.2rem; flex-wrap: wrap;">
+                            <span style="font-family: monospace; font-size: 0.76rem; color: var(--accent-cyan);">
+                                @<?= htmlspecialchars($user['username']) ?>
+                            </span>
+                            <!-- Active button in Card view -->
+                            <button type="button" 
+                                    class="badge-pill active-badge-btn <?= $isActive ? 'is-active' : 'is-inactive' ?>"
+                                    id="cardNameActiveBtn_<?= $userId ?>_<?= $workerId ?>"
+                                    onclick="toggleUserStatus(<?= $userId ?>, <?= $workerId ?>, '<?= htmlspecialchars(addslashes($user['username'])) ?>')"
+                                    title="Status: <?= $isActive ? 'Active' : 'Inactive' ?> (Click to Toggle)"
+                                    style="cursor: pointer; font-size: 0.68rem; font-weight: 700; padding: 0.08rem 0.45rem; border-radius: 9999px; display: inline-flex; align-items: center; gap: 0.25rem; <?= $isActive ? 'background: rgba(16,185,129,0.18); color: #34d399; border: 1px solid rgba(16,185,129,0.45);' : 'background: rgba(148,163,184,0.12); color: #94a3b8; border: 1px solid rgba(148,163,184,0.25);' ?>">
+                                <i class="fa-solid <?= $isActive ? 'fa-circle-check' : 'fa-circle-xmark' ?>" id="cardNameActiveIcon_<?= $userId ?>_<?= $workerId ?>"></i>
+                                <span id="cardNameActiveText_<?= $userId ?>_<?= $workerId ?>"><?= $isActive ? 'ACTIVE' : 'INACTIVE' ?></span>
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -1105,7 +1289,14 @@ include __DIR__ . '/includes/header.php';
                 </span>
             </div>
 
-            <div style="padding: 0.65rem 0.85rem; background: rgba(0,0,0,0.22); border: 1px solid rgba(255,255,255,0.05); border-radius: var(--radius-sm); font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.45rem;">
+            <!-- Card Assigned Work Tag -->
+            <div id="cardAssignedWorkContainer_<?= $userId ?>_<?= $workerId ?>" style="margin-top: 0.45rem; <?= empty($assignedWork) ? 'display: none;' : '' ?>">
+                <span class="badge-pill" style="background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.4); font-size: 0.72rem; font-weight: 600; padding: 0.12rem 0.45rem; display: inline-flex; align-items: center; gap: 0.25rem;" title="Assigned Production Category">
+                    <i class="fa-solid fa-clipboard-check"></i> WORK: <strong style="color: #fff; text-transform: uppercase;" id="cardAssignedWorkText_<?= $userId ?>_<?= $workerId ?>"><?= htmlspecialchars($assignedWork) ?></strong>
+                </span>
+            </div>
+
+            <div style="padding: 0.65rem 0.85rem; background: rgba(0,0,0,0.22); border: 1px solid rgba(255,255,255,0.05); border-radius: var(--radius-sm); font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.45rem; margin-top: 0.5rem;">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <span class="text-muted"><i class="fa-solid fa-phone" style="font-size: 0.7rem;"></i> Phone:</span>
                     <strong style="color: #fff;"><?= htmlspecialchars($phone) ?></strong>
@@ -1142,7 +1333,18 @@ include __DIR__ . '/includes/header.php';
                 </div>
             </div>
 
-            <div style="display: flex; gap: 0.35rem; justify-content: flex-end; align-items: center; margin-top: auto; padding-top: 0.25rem; flex-wrap: wrap;">
+            <div style="display: flex; gap: 0.35rem; justify-content: flex-end; align-items: center; margin-top: auto; padding-top: 0.5rem; flex-wrap: wrap;">
+                <!-- Assign Work Button in Card View: ONLY for user logged in today -->
+                <?php if ($isLoggedInToday): ?>
+                    <button type="button" 
+                        class="btn btn-sm btn-assign-work" 
+                        id="cardAssignWorkBtn_<?= $userId ?>_<?= $workerId ?>"
+                        onclick="openAssignWorkModal(<?= $workerId ?>, '<?= htmlspecialchars(addslashes($displayName)) ?>', '<?= htmlspecialchars(addslashes($user['username'])) ?>', '<?= htmlspecialchars(addslashes($unitVal)) ?>', '<?= htmlspecialchars(addslashes($designation)) ?>', '<?= htmlspecialchars(addslashes($assignedWork)) ?>', <?= $userId ?>)"
+                        title="Assign Garment Production Category">
+                        <i class="fa-solid fa-clipboard-list"></i> Assign Work
+                    </button>
+                <?php endif; ?>
+
                 <!-- 1. View Details Button -->
                 <button type="button" class="btn-action-view" 
                     onclick="openUserDetailsModal(<?= htmlspecialchars(json_encode($userRecordJson), ENT_QUOTES, 'UTF-8') ?>)" 
@@ -1830,6 +2032,159 @@ include __DIR__ . '/includes/header.php';
     </div>
 </div>
 <?php endif; ?>
+
+<!-- Modal: Assign Work Box & Categories for Logged-In User -->
+<div id="assignWorkModal" class="modal-overlay" style="display: none;" aria-hidden="true">
+    <div class="modal-card" style="max-width: 820px; width: 95%; max-height: 90vh; display: flex; flex-direction: column;">
+        <div class="modal-header" style="border-bottom: 1px solid rgba(255,255,255,0.08); padding: 1.15rem 1.4rem;">
+            <div class="modal-title-group" style="display: flex; align-items: center; gap: 0.75rem;">
+                <div style="width: 44px; height: 44px; border-radius: 12px; background: rgba(16,185,129,0.15); border: 1px solid rgba(16,185,129,0.35); display: flex; align-items: center; justify-content: center; color: #10b981; font-size: 1.25rem; box-shadow: 0 0 18px rgba(16,185,129,0.25);">
+                    <i class="fa-solid fa-clipboard-check"></i>
+                </div>
+                <div>
+                    <h3 style="margin: 0; font-size: 1.15rem; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 0.5rem;">
+                        Assign Work to User
+                        <span class="badge-pill unit-emerald-pill" style="font-size: 0.7rem;">Active Today</span>
+                    </h3>
+                    <p class="text-muted" style="margin: 0.15rem 0 0 0; font-size: 0.78rem;">
+                        Select garment category, subcategory and garment type to assign work to this user.
+                    </p>
+                </div>
+            </div>
+            <button type="button" class="modal-close-btn" onclick="closeAssignWorkModal()">&times;</button>
+        </div>
+
+        <div class="modal-body" style="padding: 1.25rem 1.4rem; overflow-y: auto; flex: 1 1 auto;">
+            <!-- Target User Banner -->
+            <div style="background: rgba(15,23,42,0.9); border: 1px solid rgba(16,185,129,0.3); border-radius: 10px; padding: 0.95rem 1.15rem; margin-bottom: 1.15rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem;">
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <div id="assignModalAvatar" style="width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, #06b6d4, #3b82f6); color: #fff; font-weight: 800; display: flex; align-items: center; justify-content: center; font-size: 1.1rem;">
+                        U
+                    </div>
+                    <div>
+                        <div style="display: flex; align-items: center; gap: 0.45rem;">
+                            <strong id="assignModalWorkerName" style="color: #fff; font-size: 0.98rem;">User Name</strong>
+                            <span class="worker-login-tick-badge" title="Logged in today"><i class="fa-solid fa-circle-check"></i></span>
+                            <span id="assignModalWorkerId" class="text-cyan font-bold" style="font-size: 0.8rem;">PU001-1</span>
+                        </div>
+                        <div style="font-size: 0.75rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.5rem; margin-top: 0.1rem;">
+                            <span id="assignModalWorkerUnit"><i class="fa-solid fa-industry"></i> Unit 1</span>
+                            <span>•</span>
+                            <span id="assignModalWorkerRole">Operator</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div style="text-align: right;">
+                    <div style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 0.15rem;">Current Work Assignment:</div>
+                    <div id="assignModalCurrentWorkBadge" class="badge-pill" style="background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.35); font-weight: 700; font-size: 0.8rem;">
+                        <i class="fa-solid fa-clipboard-check"></i> <span id="assignModalCurrentWorkText">None</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Categories Multi-Selection Toolbar & Search Box -->
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.85rem;">
+                <div style="display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap;">
+                    <h4 style="font-size: 0.92rem; font-weight: 700; color: #fff; margin: 0; display: flex; align-items: center; gap: 0.45rem;">
+                        <i class="fa-solid fa-layer-group text-cyan"></i> Select Production Categories
+                    </h4>
+                    <span class="badge-pill unit-emerald-pill" id="selectedCatCounterBadge" style="font-size: 0.75rem; font-weight: 700;">
+                        <i class="fa-solid fa-check-double"></i> <span id="selectedCatCountText">0 Selected</span>
+                    </span>
+                    <button type="button" class="btn btn-outline btn-xs" onclick="selectAllCategories()" style="font-size: 0.72rem; padding: 0.18rem 0.55rem; color: #38bdf8;">
+                        Select All
+                    </button>
+                    <button type="button" class="btn btn-outline btn-xs" onclick="clearSelectedCategories()" style="font-size: 0.72rem; padding: 0.18rem 0.55rem; color: #f43f5e;">
+                        Clear
+                    </button>
+                </div>
+                <div class="search-input-wrapper" style="min-width: 200px; max-width: 260px;">
+                    <i class="fa-solid fa-magnifying-glass"></i>
+                    <input type="text" id="assignCatSearchInput" class="form-control" placeholder="Search categories..." style="height: 34px; font-size: 0.78rem;">
+                </div>
+            </div>
+
+            <!-- Category Selection Grid -->
+            <div class="assign-cat-grid" id="assignCatCardsContainer">
+                <?php if (empty($activeGarmentCategories)): ?>
+                    <div style="grid-column: 1 / -1; text-align: center; padding: 2rem; color: var(--text-muted);">
+                        <i class="fa-solid fa-boxes-stacked fa-2x" style="opacity: 0.3; margin-bottom: 0.5rem;"></i>
+                        <p>No active categories configured. Add categories in <a href="categories.php" class="text-cyan">Garment Categories</a>.</p>
+                    </div>
+                <?php else: ?>
+                    <?php foreach ($activeGarmentCategories as $cat): 
+                        $fullTitle = htmlspecialchars($cat['category_name']);
+                        $sub = htmlspecialchars($cat['subcategory_name']);
+                        $subsub = htmlspecialchars($cat['sub_subcategory_name'] ?? '');
+                        $comboKey = $cat['category_name'] . ($sub ? ' - ' . $sub : '') . ($subsub ? ' - ' . $subsub : '');
+                    ?>
+                        <div class="assign-cat-card" 
+                             id="assignCard_<?= (int)$cat['id'] ?>"
+                             data-cat-id="<?= (int)$cat['id'] ?>"
+                             data-cat-name="<?= htmlspecialchars($cat['category_name']) ?>"
+                             data-subcat-name="<?= htmlspecialchars($cat['subcategory_name']) ?>"
+                             data-subsub-name="<?= htmlspecialchars($cat['sub_subcategory_name'] ?? '') ?>"
+                             data-search="<?= strtolower(htmlspecialchars($comboKey)) ?>"
+                             onclick="toggleCategoryCardSelection(<?= (int)$cat['id'] ?>)">
+                            <div>
+                                <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.35rem;">
+                                    <div style="display: flex; align-items: center; gap: 0.45rem;">
+                                        <div style="width: 28px; height: 28px; border-radius: 7px; background: rgba(6,182,212,0.14); color: #06b6d4; display: flex; align-items: center; justify-content: center; font-size: 0.85rem;">
+                                            <i class="fa-solid fa-shirt"></i>
+                                        </div>
+                                        <strong style="color: #fff; font-size: 0.9rem;"><?= $fullTitle ?></strong>
+                                    </div>
+                                    <div class="cat-card-check-box" id="catCheck_<?= (int)$cat['id'] ?>">
+                                        <i class="fa-solid fa-check"></i>
+                                    </div>
+                                </div>
+                                <div style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.2rem;">
+                                    <i class="fa-solid fa-tag text-cyan" style="font-size: 0.68rem;"></i> <?= $sub ?>
+                                </div>
+                                <?php if (!empty($subsub)): ?>
+                                    <div style="font-size: 0.72rem; color: var(--text-secondary); background: rgba(0,0,0,0.25); padding: 0.15rem 0.4rem; border-radius: 4px; display: inline-block;">
+                                        Type: <?= $subsub ?>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+
+                            <button type="button" 
+                                    class="btn btn-outline btn-sm btn-select-cat" 
+                                    id="catSelectBtn_<?= (int)$cat['id'] ?>"
+                                    onclick="event.stopPropagation(); toggleCategoryCardSelection(<?= (int)$cat['id'] ?>)"
+                                    style="width: 100%; font-size: 0.75rem; padding: 0.32rem 0.5rem; justify-content: center;">
+                                <i class="fa-solid fa-plus"></i> Select
+                            </button>
+                        </div>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </div>
+
+            <!-- Optional Custom Target / Notes Field -->
+            <div style="margin-top: 1.15rem; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 0.85rem;">
+                <label style="font-size: 0.78rem; font-weight: 600; color: #fff; margin-bottom: 0.35rem; display: flex; align-items: center; gap: 0.35rem;">
+                    <i class="fa-solid fa-pen text-cyan"></i> Optional Production Instructions / Batch Notes
+                </label>
+                <input type="text" id="assignModalNotesInput" class="form-control" placeholder="e.g. Target: 50 pieces today, check stitching alignment..." style="font-size: 0.8rem; height: 36px;">
+            </div>
+        </div>
+
+        <div class="modal-footer" style="border-top: 1px solid rgba(255,255,255,0.08); padding: 0.85rem 1.4rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;">
+            <span class="text-muted" style="font-size: 0.75rem;">
+                <i class="fa-solid fa-circle-info text-cyan"></i> Multi-select categories for operator. Workstation will show subcategories for all selected.
+            </span>
+            <div style="display: flex; align-items: center; gap: 0.65rem;">
+                <button type="button" class="btn btn-outline btn-sm" onclick="closeAssignWorkModal()">
+                    Close
+                </button>
+                <button type="button" class="btn btn-primary btn-sm" id="btnSaveCategoryAssignments" onclick="saveSelectedCategoryAssignments()" style="padding: 0.45rem 1.35rem; font-weight: 700; background: linear-gradient(135deg, #10b981, #059669); border: none; box-shadow: 0 4px 14px rgba(16,185,129,0.35); display: inline-flex; align-items: center; gap: 0.45rem;">
+                    <i class="fa-solid fa-floppy-disk"></i> Save Assignment
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <!-- ==========================================
      8. JAVASCRIPT CONTROLLERS
@@ -3200,9 +3555,11 @@ function recalculateUnitCounts() {
 async function toggleUserStatus(userId, workerId, username) {
     const btn = document.getElementById(`toggleBtn_${userId}_${workerId}`);
     const cardBtn = document.getElementById(`cardToggleBtn_${userId}_${workerId}`);
+    const statusPill = document.getElementById(`statusPill_${userId}_${workerId}`);
     
     if (btn) btn.disabled = true;
     if (cardBtn) cardBtn.disabled = true;
+    if (statusPill) statusPill.disabled = true;
 
     try {
         const res = await fetch('api.php?action=toggle_user_status', {
@@ -3218,7 +3575,6 @@ async function toggleUserStatus(userId, workerId, username) {
             // 1. Update Table Row
             const toggleIcon = document.getElementById(`toggleIcon_${userId}_${workerId}`);
             const toggleText = document.getElementById(`toggleText_${userId}_${workerId}`);
-            const statusPill = document.getElementById(`statusPill_${userId}_${workerId}`);
             const statusText = document.getElementById(`statusText_${userId}_${workerId}`);
             const row = document.getElementById(`userRow_${userId}_${workerId}`);
 
@@ -3228,11 +3584,24 @@ async function toggleUserStatus(userId, workerId, username) {
                 toggleText.innerText = newStatus;
             }
             if (statusPill && statusText) {
-                statusPill.className = `status-pill status-${isAct ? 'active' : 'inactive'}`;
+                statusPill.className = `status-pill status-pill-btn status-${isAct ? 'active' : 'inactive'}`;
                 statusText.innerText = newStatus;
             }
             if (row) {
                 row.setAttribute('data-status', newStatus.toLowerCase());
+            }
+
+            // Update Active button near Name in Table Row
+            const nameActiveBtn = document.getElementById(`nameActiveBtn_${userId}_${workerId}`);
+            const nameActiveText = document.getElementById(`nameActiveText_${userId}_${workerId}`);
+            const nameActiveIcon = document.getElementById(`nameActiveIcon_${userId}_${workerId}`);
+            if (nameActiveBtn && nameActiveText && nameActiveIcon) {
+                nameActiveBtn.className = `badge-pill active-badge-btn ${isAct ? 'is-active' : 'is-inactive'}`;
+                nameActiveBtn.style.background = isAct ? 'rgba(16,185,129,0.18)' : 'rgba(148,163,184,0.12)';
+                nameActiveBtn.style.color = isAct ? '#34d399' : '#94a3b8';
+                nameActiveBtn.style.border = isAct ? '1px solid rgba(16,185,129,0.45)' : '1px solid rgba(148,163,184,0.25)';
+                nameActiveIcon.className = `fa-solid ${isAct ? 'fa-circle-check' : 'fa-circle-xmark'}`;
+                nameActiveText.innerText = newStatus.toUpperCase();
             }
 
             // 2. Update Card
@@ -3255,6 +3624,19 @@ async function toggleUserStatus(userId, workerId, username) {
                 card.setAttribute('data-status', newStatus.toLowerCase());
             }
 
+            // Update Active button in Card
+            const cardNameActiveBtn = document.getElementById(`cardNameActiveBtn_${userId}_${workerId}`);
+            const cardNameActiveText = document.getElementById(`cardNameActiveText_${userId}_${workerId}`);
+            const cardNameActiveIcon = document.getElementById(`cardNameActiveIcon_${userId}_${workerId}`);
+            if (cardNameActiveBtn && cardNameActiveText && cardNameActiveIcon) {
+                cardNameActiveBtn.className = `badge-pill active-badge-btn ${isAct ? 'is-active' : 'is-inactive'}`;
+                cardNameActiveBtn.style.background = isAct ? 'rgba(16,185,129,0.18)' : 'rgba(148,163,184,0.12)';
+                cardNameActiveBtn.style.color = isAct ? '#34d399' : '#94a3b8';
+                cardNameActiveBtn.style.border = isAct ? '1px solid rgba(16,185,129,0.45)' : '1px solid rgba(148,163,184,0.25)';
+                cardNameActiveIcon.className = `fa-solid ${isAct ? 'fa-circle-check' : 'fa-circle-xmark'}`;
+                cardNameActiveText.innerText = newStatus.toUpperCase();
+            }
+
             // 3. Update Modal if open
             if (currentModalUserData && (currentModalUserData.user_id == userId || currentModalUserData.username == username)) {
                 currentModalUserData.status = newStatus;
@@ -3272,6 +3654,7 @@ async function toggleUserStatus(userId, workerId, username) {
     } finally {
         if (btn) btn.disabled = false;
         if (cardBtn) cardBtn.disabled = false;
+        if (statusPill) statusPill.disabled = false;
     }
 }
 
@@ -3495,6 +3878,288 @@ function generateAddUserPassword() {
         input.type = 'text';
     }
 }
+
+// ==========================================
+// ASSIGN WORK MODAL CONTROLLER FOR USER DETAILS
+let selectedCategoryIds = new Set();
+let currentAssignWorkerId = null;
+let currentAssignUserId = null;
+
+function updateSelectedCategoriesCount() {
+    const count = selectedCategoryIds.size;
+    const txt = document.getElementById('selectedCatCountText');
+    if (txt) {
+        txt.innerText = count + (count === 1 ? ' Category Selected' : ' Categories Selected');
+    }
+}
+
+function toggleCategoryCardSelection(catId) {
+    const card = document.getElementById('assignCard_' + catId);
+    const btn = document.getElementById('catSelectBtn_' + catId);
+    if (!card) return;
+
+    if (selectedCategoryIds.has(catId)) {
+        selectedCategoryIds.delete(catId);
+        card.classList.remove('is-selected');
+        if (btn) {
+            btn.className = 'btn btn-outline btn-sm btn-select-cat';
+            btn.innerHTML = '<i class="fa-solid fa-plus"></i> Select';
+        }
+    } else {
+        selectedCategoryIds.add(catId);
+        card.classList.add('is-selected');
+        if (btn) {
+            btn.className = 'btn btn-primary btn-sm btn-select-cat is-selected';
+            btn.innerHTML = '<i class="fa-solid fa-check"></i> Selected';
+        }
+    }
+    updateSelectedCategoriesCount();
+}
+
+function selectAllCategories() {
+    const visibleCards = document.querySelectorAll('.assign-cat-card');
+    visibleCards.forEach(card => {
+        if (card.style.display !== 'none') {
+            const cid = parseInt(card.getAttribute('data-cat-id'), 10);
+            if (cid && !selectedCategoryIds.has(cid)) {
+                toggleCategoryCardSelection(cid);
+            }
+        }
+    });
+}
+
+function clearSelectedCategories() {
+    const cards = document.querySelectorAll('.assign-cat-card');
+    cards.forEach(card => {
+        const cid = parseInt(card.getAttribute('data-cat-id'), 10);
+        if (cid && selectedCategoryIds.has(cid)) {
+            toggleCategoryCardSelection(cid);
+        }
+    });
+    selectedCategoryIds.clear();
+    updateSelectedCategoriesCount();
+}
+
+function openAssignWorkModal(workerId, name, uid, unit, role, assignedWork, userId) {
+    currentAssignWorkerId = workerId || 0;
+    currentAssignUserId = userId || 0;
+    const modal = document.getElementById('assignWorkModal');
+    if (!modal) return;
+
+    const workerName = name || 'User';
+    const workerUid = uid || 'PU001-1';
+    const workerUnit = unit || 'Unit 1';
+    const workerRole = role || 'Operator';
+    const currentWork = assignedWork || '';
+
+    const nameEl = document.getElementById('assignModalWorkerName');
+    const uidEl = document.getElementById('assignModalWorkerId');
+    const unitEl = document.getElementById('assignModalWorkerUnit');
+    const roleEl = document.getElementById('assignModalWorkerRole');
+    const avatarEl = document.getElementById('assignModalAvatar');
+    const currentWorkEl = document.getElementById('assignModalCurrentWorkText');
+
+    if (nameEl) nameEl.innerText = workerName;
+    if (uidEl) uidEl.innerText = workerUid;
+    if (unitEl) unitEl.innerHTML = `<i class="fa-solid fa-industry"></i> ${workerUnit}`;
+    if (roleEl) roleEl.innerText = workerRole;
+    if (avatarEl) avatarEl.innerText = (workerName.charAt(0) || 'U').toUpperCase();
+    if (currentWorkEl) {
+        currentWorkEl.innerText = currentWork ? currentWork : 'None (Ready for Assignment)';
+    }
+
+    const searchInput = document.getElementById('assignCatSearchInput');
+    if (searchInput) searchInput.value = '';
+    const cards = document.querySelectorAll('.assign-cat-card');
+    cards.forEach(c => c.style.display = '');
+
+    // Reset selection state
+    clearSelectedCategories();
+
+    // Fetch live assigned work for this worker to pre-select checkboxes
+    const queryParam = workerId > 0 ? ('worker_id=' + workerId) : ('user_id=' + userId);
+    fetch('api.php?action=get_worker_assigned_work&' + queryParam)
+        .then(res => res.json())
+        .then(data => {
+            if (data.success && data.assigned_category_names && data.assigned_category_names.length > 0) {
+                const names = data.assigned_category_names.map(n => n.toLowerCase());
+                cards.forEach(card => {
+                    const cname = (card.getAttribute('data-cat-name') || '').toLowerCase();
+                    const cid = parseInt(card.getAttribute('data-cat-id'), 10);
+                    if (names.includes(cname) && cid && !selectedCategoryIds.has(cid)) {
+                        toggleCategoryCardSelection(cid);
+                    }
+                });
+            } else if (currentWork) {
+                cards.forEach(card => {
+                    const cname = (card.getAttribute('data-cat-name') || '').toLowerCase();
+                    const cid = parseInt(card.getAttribute('data-cat-id'), 10);
+                    if (currentWork.toLowerCase().includes(cname) && cid && !selectedCategoryIds.has(cid)) {
+                        toggleCategoryCardSelection(cid);
+                    }
+                });
+            }
+        })
+        .catch(err => {
+            console.warn('Could not fetch active assignments:', err);
+            if (currentWork) {
+                cards.forEach(card => {
+                    const cname = (card.getAttribute('data-cat-name') || '').toLowerCase();
+                    const cid = parseInt(card.getAttribute('data-cat-id'), 10);
+                    if (currentWork.toLowerCase().includes(cname) && cid && !selectedCategoryIds.has(cid)) {
+                        toggleCategoryCardSelection(cid);
+                    }
+                });
+            }
+        });
+
+    modal.style.display = 'flex';
+}
+
+function closeAssignWorkModal() {
+    const modal = document.getElementById('assignWorkModal');
+    if (modal) modal.style.display = 'none';
+    currentAssignWorkerId = null;
+    currentAssignUserId = null;
+    clearSelectedCategories();
+}
+
+async function saveSelectedCategoryAssignments() {
+    if (!currentAssignWorkerId && !currentAssignUserId) {
+        alert('No user selected for assignment.');
+        return;
+    }
+
+    if (selectedCategoryIds.size === 0) {
+        if (!confirm('No categories are currently selected. Do you want to clear work assignment for this user?')) {
+            return;
+        }
+    }
+
+    const categories = [];
+    selectedCategoryIds.forEach(cid => {
+        const card = document.getElementById('assignCard_' + cid);
+        if (card) {
+            categories.push({
+                category_id: cid,
+                category_name: card.getAttribute('data-cat-name') || '',
+                subcategory_name: card.getAttribute('data-subcat-name') || '',
+                sub_subcategory_name: card.getAttribute('data-subsub-name') || ''
+            });
+        }
+    });
+
+    const notesInput = document.getElementById('assignModalNotesInput');
+    const notes = notesInput ? notesInput.value.trim() : '';
+    const saveBtn = document.getElementById('btnSaveCategoryAssignments');
+    const origHtml = saveBtn ? saveBtn.innerHTML : '';
+
+    if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+    }
+
+    try {
+        const res = await fetch('api.php?action=assign_worker_category', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                worker_id: currentAssignWorkerId,
+                user_id: currentAssignUserId,
+                categories: categories,
+                notes: notes
+            })
+        });
+        const data = await res.json();
+
+        if (data.success) {
+            const wid = data.worker_id || currentAssignWorkerId;
+            const uid = data.user_id || currentAssignUserId;
+
+            // 1. Update Table Row assigned tag
+            const tableTag = document.getElementById(`assignedWorkContainer_${uid}_${wid}`);
+            const tableText = document.getElementById(`assignedWorkText_${uid}_${wid}`);
+            if (tableTag) {
+                if (data.assigned_work) {
+                    if (tableText) {
+                        tableText.innerText = data.assigned_work;
+                    } else {
+                        tableTag.innerHTML = `
+                            <span class="badge-pill" style="background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.4); font-size: 0.72rem; font-weight: 600; padding: 0.15rem 0.5rem; display: inline-flex; align-items: center; gap: 0.3rem;" title="Assigned Production Category">
+                                <i class="fa-solid fa-clipboard-check"></i> WORK: <strong style="color: #fff; text-transform: uppercase;">${data.assigned_work}</strong>
+                            </span>
+                        `;
+                    }
+                    tableTag.style.display = 'block';
+                } else {
+                    tableTag.style.display = 'none';
+                    tableTag.innerHTML = '';
+                }
+            }
+
+            // 2. Update Card assigned tag
+            const cardTag = document.getElementById(`cardAssignedWorkContainer_${uid}_${wid}`);
+            const cardText = document.getElementById(`cardAssignedWorkText_${uid}_${wid}`);
+            if (cardTag) {
+                if (data.assigned_work) {
+                    if (cardText) {
+                        cardText.innerText = data.assigned_work;
+                    } else {
+                        cardTag.innerHTML = `
+                            <span class="badge-pill" style="background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.4); font-size: 0.72rem; font-weight: 600; padding: 0.12rem 0.45rem; display: inline-flex; align-items: center; gap: 0.25rem;" title="Assigned Production Category">
+                                <i class="fa-solid fa-clipboard-check"></i> WORK: <strong style="color: #fff; text-transform: uppercase;">${data.assigned_work}</strong>
+                            </span>
+                        `;
+                    }
+                    cardTag.style.display = 'block';
+                } else {
+                    cardTag.style.display = 'none';
+                    cardTag.innerHTML = '';
+                }
+            }
+
+            // 3. Update Modal text
+            const curText = document.getElementById('assignModalCurrentWorkText');
+            if (curText) curText.innerText = data.assigned_work || 'None';
+
+            if (typeof showToast === 'function') {
+                showToast(data.message, 'success');
+            }
+
+            setTimeout(closeAssignWorkModal, 400);
+        } else {
+            alert(data.message || 'Failed to save category assignment.');
+        }
+    } catch (err) {
+        console.error(err);
+        alert('Server error while saving category assignment: ' + err.message);
+    } finally {
+        if (saveBtn) {
+            saveBtn.disabled = false;
+            saveBtn.innerHTML = origHtml;
+        }
+    }
+}
+
+// Category search and outside click handlers for assign work modal
+document.addEventListener('DOMContentLoaded', () => {
+    const catSearch = document.getElementById('assignCatSearchInput');
+    if (catSearch) {
+        catSearch.addEventListener('input', () => {
+            const q = catSearch.value.toLowerCase().trim();
+            const cards = document.querySelectorAll('.assign-cat-card');
+            cards.forEach(card => {
+                const s = card.getAttribute('data-search') || '';
+                card.style.display = (!q || s.includes(q)) ? '' : 'none';
+            });
+        });
+    }
+
+    window.addEventListener('click', (e) => {
+        const assignModal = document.getElementById('assignWorkModal');
+        if (e.target === assignModal) closeAssignWorkModal();
+    });
+});
 </script>
 
 <?php include __DIR__ . '/includes/footer.php'; ?>

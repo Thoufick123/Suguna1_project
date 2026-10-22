@@ -475,7 +475,7 @@ try {
                 exit;
             }
 
-            $currentUnit = !empty($worker['unit']) ? $worker['unit'] : 'Unit 1';
+            $currentUnit = !empty($requestData['unit']) ? trim($requestData['unit']) : (!empty($worker['unit']) ? $worker['unit'] : 'Unit 1');
 
             // Check if an entry already exists for this worker, CURRENT UNIT, date, material, and shift
             $existStmt = $pdo->prepare("
@@ -1142,7 +1142,7 @@ try {
         // 8. 3-TIER CATEGORY, SUBCATEGORY & SUB-SUBCATEGORY MANAGEMENT (ADMIN ONLY)
         // ==========================================
         case 'get_categories':
-            $stmt = $pdo->query("SELECT id, category_name, subcategory_name, sub_subcategory_name, status FROM garment_categories ORDER BY category_name ASC, subcategory_name ASC, sub_subcategory_name ASC");
+            $stmt = $pdo->query("SELECT id, category_name, subcategory_name, sub_subcategory_name, status, stitch_time_seconds FROM garment_categories ORDER BY category_name ASC, subcategory_name ASC, sub_subcategory_name ASC");
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
             $tree = [];
             $flat = [];
@@ -1151,12 +1151,14 @@ try {
                 $s = $r['subcategory_name'];
                 $subsub = trim($r['sub_subcategory_name']);
                 $st = !empty($r['status']) ? $r['status'] : 'Active';
+                $stTime = max(0, (int)($r['stitch_time_seconds'] ?? 0));
                 if (!isset($tree[$c])) {
                     $tree[$c] = [];
                 }
                 if (!isset($tree[$c][$s])) {
                     $tree[$c][$s] = [
                         'status' => $st,
+                        'stitch_time_seconds' => $stTime,
                         'items' => []
                     ];
                 }
@@ -1164,7 +1166,8 @@ try {
                     $tree[$c][$s]['items'][] = [
                         'id' => (int)$r['id'],
                         'name' => $subsub,
-                        'status' => $st
+                        'status' => $st,
+                        'stitch_time_seconds' => $stTime
                     ];
                 }
                 $flat[] = [
@@ -1173,6 +1176,7 @@ try {
                     'subcategory' => $s,
                     'sub_subcategory' => $subsub,
                     'status' => $st,
+                    'stitch_time_seconds' => $stTime,
                     'full_label' => ($subsub !== '') ? "{$c} › {$s} › {$subsub}" : "{$c} › {$s}"
                 ];
             }
@@ -1189,6 +1193,8 @@ try {
             $catName = trim($requestData['category_name'] ?? '');
             $subName = trim($requestData['subcategory_name'] ?? '');
             $subSubName = trim($requestData['sub_subcategory_name'] ?? '');
+            $stitchTime = max(0, (int)($requestData['stitch_time_seconds'] ?? 0));
+
             if (empty($catName) || empty($subName)) {
                 echo json_encode(['success' => false, 'message' => 'Category and Subcategory are required. (Sub-Subcategory is optional).']);
                 exit;
@@ -1206,11 +1212,16 @@ try {
                 echo json_encode(['success' => false, 'message' => $dupMsg]);
                 exit;
             }
-            $ins = $pdo->prepare("INSERT INTO garment_categories (category_name, subcategory_name, sub_subcategory_name, status) VALUES (:cat, :sub, :subsub, 'Active')");
-            $ins->execute([':cat' => $catName, ':sub' => $subName, ':subsub' => $subSubName]);
+            $ins = $pdo->prepare("INSERT INTO garment_categories (category_name, subcategory_name, sub_subcategory_name, status, stitch_time_seconds) VALUES (:cat, :sub, :subsub, 'Active', :stitch_time)");
+            $ins->execute([
+                ':cat' => $catName, 
+                ':sub' => $subName, 
+                ':subsub' => $subSubName,
+                ':stitch_time' => $stitchTime
+            ]);
 
             // Re-fetch tree
-            $stmt = $pdo->query("SELECT id, category_name, subcategory_name, sub_subcategory_name, status FROM garment_categories ORDER BY category_name ASC, subcategory_name ASC, sub_subcategory_name ASC");
+            $stmt = $pdo->query("SELECT id, category_name, subcategory_name, sub_subcategory_name, status, stitch_time_seconds FROM garment_categories ORDER BY category_name ASC, subcategory_name ASC, sub_subcategory_name ASC");
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
             $tree = [];
             $flat = [];
@@ -1219,10 +1230,11 @@ try {
                 $s = $r['subcategory_name'];
                 $subsub = trim($r['sub_subcategory_name']);
                 $st = !empty($r['status']) ? $r['status'] : 'Active';
+                $stTime = max(0, (int)($r['stitch_time_seconds'] ?? 0));
                 if (!isset($tree[$c])) $tree[$c] = [];
-                if (!isset($tree[$c][$s])) $tree[$c][$s] = ['status' => $st, 'items' => []];
+                if (!isset($tree[$c][$s])) $tree[$c][$s] = ['status' => $st, 'stitch_time_seconds' => $stTime, 'items' => []];
                 if ($subsub !== '') {
-                    $tree[$c][$s]['items'][] = ['id' => (int)$r['id'], 'name' => $subsub, 'status' => $st];
+                    $tree[$c][$s]['items'][] = ['id' => (int)$r['id'], 'name' => $subsub, 'status' => $st, 'stitch_time_seconds' => $stTime];
                 }
                 $flat[] = [
                     'id' => (int)$r['id'],
@@ -1230,10 +1242,14 @@ try {
                     'subcategory' => $s,
                     'sub_subcategory' => $subsub,
                     'status' => $st,
+                    'stitch_time_seconds' => $stTime,
                     'full_label' => ($subsub !== '') ? "{$c} › {$s} › {$subsub}" : "{$c} › {$s}"
                 ];
             }
             $dispLabel = ($subSubName !== '') ? "{$catName} › {$subName} › {$subSubName}" : "{$catName} › {$subName}";
+            if ($stitchTime > 0) {
+                $dispLabel .= " ({$stitchTime}s stitch time)";
+            }
             echo json_encode([
                 'success' => true,
                 'message' => "Successfully added: {$dispLabel}",
@@ -1242,6 +1258,34 @@ try {
                 'flat' => $flat,
                 'total' => count($rows)
             ]);
+            break;
+
+        case 'set_category_time':
+            $catName = trim($requestData['category_name'] ?? '');
+            $subName = trim($requestData['subcategory_name'] ?? '');
+            $id = intval($requestData['id'] ?? 0);
+            $stitchTime = max(0, intval($requestData['stitch_time_seconds'] ?? 0));
+
+            if (!empty($catName) && !empty($subName)) {
+                $upd = $pdo->prepare("UPDATE garment_categories SET stitch_time_seconds = :sec WHERE category_name = :c AND subcategory_name = :s");
+                $upd->execute([':sec' => $stitchTime, ':c' => $catName, ':s' => $subName]);
+                $msg = "Stitching time for '{$subName}' set to {$stitchTime}s";
+            } elseif (!empty($catName)) {
+                $upd = $pdo->prepare("UPDATE garment_categories SET stitch_time_seconds = :sec WHERE category_name = :c");
+                $upd->execute([':sec' => $stitchTime, ':c' => $catName]);
+                $msg = "Stitching time for category '{$catName}' set to {$stitchTime}s";
+            } elseif ($id > 0) {
+                $upd = $pdo->prepare("UPDATE garment_categories SET stitch_time_seconds = :sec WHERE id = :id");
+                $upd->execute([':sec' => $stitchTime, ':id' => $id]);
+                $msg = "Stitching time set to {$stitchTime}s";
+            } else {
+                echo json_encode(['success' => false, 'message' => 'Missing parameter.']);
+                exit;
+            }
+
+            $stmt = $pdo->query("SELECT id, category_name, subcategory_name, sub_subcategory_name, status, stitch_time_seconds FROM garment_categories ORDER BY category_name ASC, subcategory_name ASC, sub_subcategory_name ASC");
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            echo json_encode(['success' => true, 'message' => $msg, 'rows' => $rows]);
             break;
 
         case 'toggle_category_status':
@@ -2409,30 +2453,38 @@ try {
         // ==========================================
         case 'assign_worker_category':
             $workerId = (int)($requestData['worker_id'] ?? 0);
-            $catId = !empty($requestData['category_id']) ? (int)$requestData['category_id'] : null;
-            $catName = trim($requestData['category_name'] ?? '');
-            $subcatName = trim($requestData['subcategory_name'] ?? '');
-            $subsubName = trim($requestData['sub_subcategory_name'] ?? '');
+            $userId = (int)($requestData['user_id'] ?? 0);
+            $username = trim($requestData['username'] ?? '');
             $notes = trim($requestData['notes'] ?? '');
 
-            if ($workerId <= 0) {
-                echo json_encode(['success' => false, 'message' => 'Worker ID is required.']);
-                exit;
+            // Fallback resolution for workerId from userId or username
+            if ($workerId <= 0 && $userId > 0) {
+                $wFind = $pdo->prepare("
+                    SELECT w.id FROM workers w 
+                    JOIN users u ON (LOWER(u.username) = LOWER(w.unique_id) OR LOWER(u.full_name) = LOWER(w.name) OR REPLACE(u.username, '-', '') = REPLACE(w.unique_id, '-', '')) 
+                    WHERE u.id = :uid LIMIT 1
+                ");
+                $wFind->execute([':uid' => $userId]);
+                $foundWid = $wFind->fetchColumn();
+                if ($foundWid) {
+                    $workerId = (int)$foundWid;
+                }
             }
-
-            if ($catId && empty($catName)) {
-                $cStmt = $pdo->prepare("SELECT category_name, subcategory_name, sub_subcategory_name FROM garment_categories WHERE id = :cid LIMIT 1");
-                $cStmt->execute([':cid' => $catId]);
-                $cRow = $cStmt->fetch(PDO::FETCH_ASSOC);
-                if ($cRow) {
-                    $catName = $cRow['category_name'];
-                    $subcatName = $cRow['subcategory_name'];
-                    $subsubName = $cRow['sub_subcategory_name'];
+            if ($workerId <= 0 && !empty($username)) {
+                $wFind = $pdo->prepare("
+                    SELECT id FROM workers 
+                    WHERE LOWER(unique_id) = LOWER(:u) OR LOWER(name) = LOWER(:u) OR REPLACE(unique_id, '-', '') = REPLACE(:u, '-', '') 
+                    LIMIT 1
+                ");
+                $wFind->execute([':u' => $username]);
+                $foundWid = $wFind->fetchColumn();
+                if ($foundWid) {
+                    $workerId = (int)$foundWid;
                 }
             }
 
-            if (empty($catName)) {
-                echo json_encode(['success' => false, 'message' => 'Garment Category Name is required to assign work.']);
+            if ($workerId <= 0) {
+                echo json_encode(['success' => false, 'message' => 'Worker or registered user profile not found.']);
                 exit;
             }
 
@@ -2445,30 +2497,116 @@ try {
                 exit;
             }
 
-            $parts = array_filter([$catName, $subcatName, $subsubName]);
-            $assignedWorkStr = implode(' - ', $parts);
+            // Support either multiple categories array or single category
+            $categoriesToAssign = [];
+            if (!empty($requestData['categories']) && is_array($requestData['categories'])) {
+                $categoriesToAssign = $requestData['categories'];
+            } elseif (!empty($requestData['category_ids']) && is_array($requestData['category_ids'])) {
+                foreach ($requestData['category_ids'] as $cid) {
+                    $categoriesToAssign[] = ['category_id' => (int)$cid];
+                }
+            } elseif (!empty($requestData['category_id']) || !empty($requestData['category_name'])) {
+                $categoriesToAssign[] = [
+                    'category_id' => !empty($requestData['category_id']) ? (int)$requestData['category_id'] : null,
+                    'category_name' => trim($requestData['category_name'] ?? ''),
+                    'subcategory_name' => trim($requestData['subcategory_name'] ?? ''),
+                    'sub_subcategory_name' => trim($requestData['sub_subcategory_name'] ?? '')
+                ];
+            }
 
-            $assignedBy = $currentUser['username'] ?? 'admin';
             $today = date('Y-m-d');
             $now = date('Y-m-d H:i:s');
+            $assignedBy = $currentUser['username'] ?? 'admin';
 
-            $insAssign = $pdo->prepare("
+            // If empty categories passed, admin is clearing today's assignment
+            if (empty($categoriesToAssign)) {
+                $pdo->prepare("UPDATE worker_work_assignments SET status = 'Inactive' WHERE worker_id = :wid AND assigned_date = :adate")
+                    ->execute([':wid' => $workerId, ':adate' => $today]);
+
+                $pdo->prepare("UPDATE workers SET assigned_work = NULL, assigned_category_id = NULL, assigned_at = :now WHERE id = :wid")
+                    ->execute([':now' => $now, ':wid' => $workerId]);
+
+                echo json_encode([
+                    'success' => true,
+                    'worker_id' => $workerId,
+                    'user_id' => $userId,
+                    'worker_name' => $worker['name'],
+                    'assigned_work' => '',
+                    'assigned_categories' => [],
+                    'count' => 0,
+                    'message' => "Cleared work assignment for {$worker['name']}."
+                ]);
+                exit;
+            }
+
+            // Deactivate previous active assignments for this worker for today to prevent duplicates
+            $pdo->prepare("UPDATE worker_work_assignments SET status = 'Inactive' WHERE worker_id = :wid AND assigned_date = :adate")
+                ->execute([':wid' => $workerId, ':adate' => $today]);
+
+            $assignedCategoryNames = [];
+            $assignedDisplayParts = [];
+            $firstCatId = null;
+            $insertedIds = [];
+
+            $insStmt = $pdo->prepare("
                 INSERT INTO worker_work_assignments 
                     (worker_id, category_id, category_name, subcategory_name, sub_subcategory_name, assigned_date, assigned_by, status, notes)
                 VALUES 
                     (:wid, :cid, :cname, :subname, :subsubname, :adate, :aby, 'Active', :notes)
             ");
-            $insAssign->execute([
-                ':wid' => $workerId,
-                ':cid' => $catId,
-                ':cname' => $catName,
-                ':subname' => $subcatName,
-                ':subsubname' => $subsubName,
-                ':adate' => $today,
-                ':aby' => $assignedBy,
-                ':notes' => $notes
-            ]);
-            $assignmentId = $pdo->lastInsertId();
+
+            foreach ($categoriesToAssign as $cItem) {
+                $cid = !empty($cItem['category_id']) ? (int)$cItem['category_id'] : (!empty($cItem['id']) ? (int)$cItem['id'] : null);
+                $cname = trim($cItem['category_name'] ?? '');
+                $subname = trim($cItem['subcategory_name'] ?? '');
+                $subsubname = trim($cItem['sub_subcategory_name'] ?? '');
+
+                if ($cid && (empty($cname) || empty($subname))) {
+                    $cFetch = $pdo->prepare("SELECT category_name, subcategory_name, sub_subcategory_name FROM garment_categories WHERE id = :cid LIMIT 1");
+                    $cFetch->execute([':cid' => $cid]);
+                    $row = $cFetch->fetch(PDO::FETCH_ASSOC);
+                    if ($row) {
+                        if (empty($cname)) $cname = $row['category_name'];
+                        if (empty($subname)) $subname = $row['subcategory_name'];
+                        if (empty($subsubname)) $subsubname = $row['sub_subcategory_name'] ?? '';
+                    }
+                }
+
+                if (empty($cname)) continue;
+
+                if ($firstCatId === null && $cid) {
+                    $firstCatId = $cid;
+                }
+
+                if (!in_array($cname, $assignedCategoryNames, true)) {
+                    $assignedCategoryNames[] = $cname;
+                }
+
+                $part = $cname . ($subname ? " - {$subname}" : "");
+                if (!in_array($part, $assignedDisplayParts, true)) {
+                    $assignedDisplayParts[] = $part;
+                }
+
+                $insStmt->execute([
+                    ':wid' => $workerId,
+                    ':cid' => $cid,
+                    ':cname' => $cname,
+                    ':subname' => $subname,
+                    ':subsubname' => $subsubname,
+                    ':adate' => $today,
+                    ':aby' => $assignedBy,
+                    ':notes' => $notes
+                ]);
+                $insertedIds[] = $pdo->lastInsertId();
+            }
+
+            if (empty($assignedCategoryNames)) {
+                echo json_encode(['success' => false, 'message' => 'Please select at least one valid garment category.']);
+                exit;
+            }
+
+            // Build assigned work summary string (e.g. "Nighty, Kurti")
+            $assignedWorkStr = implode(', ', $assignedCategoryNames);
 
             $updWorker = $pdo->prepare("
                 UPDATE workers 
@@ -2477,23 +2615,24 @@ try {
             ");
             $updWorker->execute([
                 ':work' => $assignedWorkStr,
-                ':cid' => $catId,
+                ':cid' => $firstCatId,
                 ':now' => $now,
                 ':wid' => $workerId
             ]);
 
             echo json_encode([
                 'success' => true,
-                'assignment_id' => $assignmentId,
+                'assignment_ids' => $insertedIds,
                 'worker_id' => $workerId,
+                'user_id' => $userId,
                 'worker_name' => $worker['name'],
-                'category_name' => $catName,
-                'subcategory_name' => $subcatName,
-                'sub_subcategory_name' => $subsubName,
+                'category_name' => $assignedCategoryNames[0],
+                'assigned_categories' => $assignedCategoryNames,
                 'assigned_work' => $assignedWorkStr,
                 'assigned_at' => $now,
+                'count' => count($assignedCategoryNames),
                 'formatted_time' => date('h:i A'),
-                'message' => "Category '{$catName}' assigned to {$worker['name']} ({$worker['unique_id']}) successfully!"
+                'message' => count($assignedCategoryNames) . " Category(s) (" . implode(', ', $assignedCategoryNames) . ") assigned to {$worker['name']} ({$worker['unique_id']}) successfully!"
             ]);
             break;
 
@@ -2524,6 +2663,36 @@ try {
             $effectiveLogin = $worker['last_login'] ?: $worker['user_last_login'];
             $isActiveToday = (!empty($effectiveLogin) && date('Y-m-d', strtotime($effectiveLogin)) === date('Y-m-d'));
 
+            // Fetch today's active assignments
+            $todayStmt = $pdo->prepare("
+                SELECT * FROM worker_work_assignments 
+                WHERE worker_id = :wid AND assigned_date = CURDATE() AND status = 'Active' 
+                ORDER BY id ASC
+            ");
+            $todayStmt->execute([':wid' => $workerId]);
+            $todayAssignments = $todayStmt->fetchAll(PDO::FETCH_ASSOC);
+
+            if (empty($todayAssignments)) {
+                $latestStmt = $pdo->prepare("
+                    SELECT * FROM worker_work_assignments 
+                    WHERE worker_id = :wid AND status = 'Active' 
+                    ORDER BY id DESC LIMIT 10
+                ");
+                $latestStmt->execute([':wid' => $workerId]);
+                $todayAssignments = $latestStmt->fetchAll(PDO::FETCH_ASSOC);
+            }
+
+            $assignedCategoryNames = [];
+            $assignedCategoryIds = [];
+            foreach ($todayAssignments as $ta) {
+                if (!empty($ta['category_name']) && !in_array($ta['category_name'], $assignedCategoryNames, true)) {
+                    $assignedCategoryNames[] = $ta['category_name'];
+                }
+                if (!empty($ta['category_id']) && !in_array((int)$ta['category_id'], $assignedCategoryIds, true)) {
+                    $assignedCategoryIds[] = (int)$ta['category_id'];
+                }
+            }
+
             $assignStmt = $pdo->prepare("
                 SELECT * FROM worker_work_assignments 
                 WHERE worker_id = :wid 
@@ -2550,6 +2719,9 @@ try {
                     'is_active_today' => $isActiveToday,
                     'formatted_login' => (!empty($effectiveLogin) ? date('h:i A', strtotime($effectiveLogin)) : null)
                 ],
+                'today_assignments' => $todayAssignments,
+                'assigned_category_names' => $assignedCategoryNames,
+                'assigned_category_ids' => $assignedCategoryIds,
                 'history' => $history,
                 'categories' => $allCats
             ]);
