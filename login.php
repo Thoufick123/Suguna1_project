@@ -23,6 +23,10 @@ $username = '';
 $errorMessage = '';
 $successMessage = '';
 
+if (isset($_GET['error']) && $_GET['error'] === 'inactive') {
+    $errorMessage = 'Your account has been deactivated / marked Inactive. Please contact the administrator.';
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $rawInput = file_get_contents('php://input');
     $jsonInput = json_decode($rawInput, true) ?? [];
@@ -74,9 +78,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         ]);
                         $worker = $wStmt->fetch();
 
-                        $fullName = $worker ? $worker['name'] : $username;
-                        $unit = $worker ? $worker['unit'] : 'Unit 1';
-                        $workerId = $worker ? (int)$worker['id'] : 0;
+                        if ($worker && isset($worker['status']) && strcasecmp($worker['status'], 'Inactive') === 0) {
+                            $displayName = $worker['name'] ?: $worker['unique_id'];
+                            $response['message'] = "Cannot register: Worker '{$displayName}' ({$worker['unique_id']}) is currently marked as Inactive. Please contact the administrator.";
+                        } else {
+                            $fullName = $worker ? $worker['name'] : $username;
+                            $unit = $worker ? $worker['unit'] : 'Unit 1';
+                            $workerId = $worker ? (int)$worker['id'] : 0;
 
                         if (!$workerId) {
                             $lastUidStmt = $pdo->query("SELECT unique_id FROM workers WHERE unit = 'Unit 1' ORDER BY id DESC LIMIT 1");
@@ -108,6 +116,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             ':unit' => $unit
                         ]);
                         $newUserId = (int)$pdo->lastInsertId();
+                        $regNow = date('Y-m-d H:i:s');
+                        try {
+                            $pdo->prepare("UPDATE users SET last_login = :now WHERE id = :id")->execute([':now' => $regNow, ':id' => $newUserId]);
+                            if ($workerId) {
+                                $pdo->prepare("UPDATE workers SET last_login = :now WHERE id = :id")->execute([':now' => $regNow, ':id' => $workerId]);
+                            }
+                        } catch (Exception $e) {}
 
                         $_SESSION['user_id'] = $newUserId;
                         $_SESSION['username'] = $username;
@@ -124,6 +139,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         ];
                     }
                 }
+            }
 
             } elseif ($action === 'set_password') {
                 if (strlen($password) < 4 || strlen($password) > 6) {
@@ -141,14 +157,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $user = $uStmt->fetch(PDO::FETCH_ASSOC);
 
                     if ($user) {
-                        $upd = $pdo->prepare("UPDATE users SET password = :p WHERE id = :id");
-                        $upd->execute([':p' => $passHash, ':id' => $user['id']]);
-                        $displayName = $user['full_name'] ?: $user['username'];
-                        $response = [
-                            'success' => true,
-                            'message' => "Password successfully set for '{$displayName}'! Please sign in.",
-                            'action_type' => 'set_password'
-                        ];
+                        if (isset($user['status']) && strcasecmp($user['status'], 'Inactive') === 0) {
+                            $displayName = $user['full_name'] ?: $user['username'];
+                            $response['message'] = "Cannot change password: User '{$displayName}' is currently marked as Inactive. Please contact the administrator.";
+                        } else {
+                            $upd = $pdo->prepare("UPDATE users SET password = :p WHERE id = :id");
+                            $upd->execute([':p' => $passHash, ':id' => $user['id']]);
+                            $displayName = $user['full_name'] ?: $user['username'];
+                            $response = [
+                                'success' => true,
+                                'message' => "Password successfully set for '{$displayName}'! Please sign in.",
+                                'action_type' => 'set_password'
+                            ];
+                        }
                     } else {
                         $cleanUser = str_replace([' ', '-', '+', '91'], '', strtolower($username));
                         $wStmt = $pdo->prepare("
@@ -172,21 +193,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $worker = $wStmt->fetch(PDO::FETCH_ASSOC);
 
                         if ($worker) {
-                            $ins = $pdo->prepare("
-                                INSERT INTO users (username, password, full_name, role, unit)
-                                VALUES (:uid, :pass, :name, 'operator', :unit)
-                            ");
-                            $ins->execute([
-                                ':uid' => $worker['unique_id'],
-                                ':pass' => $passHash,
-                                ':name' => $worker['name'],
-                                ':unit' => $worker['unit']
-                            ]);
-                            $response = [
-                                'success' => true,
-                                'message' => "Password created for employee {$worker['name']} ({$worker['unique_id']})! Please sign in.",
-                                'action_type' => 'set_password'
-                            ];
+                            if (isset($worker['status']) && strcasecmp($worker['status'], 'Inactive') === 0) {
+                                $displayName = $worker['name'] ?: $worker['unique_id'];
+                                $response['message'] = "Cannot set password: Worker '{$displayName}' ({$worker['unique_id']}) is currently marked as Inactive. Please contact the administrator.";
+                            } else {
+                                $ins = $pdo->prepare("
+                                    INSERT INTO users (username, password, full_name, role, unit, status)
+                                    VALUES (:uid, :pass, :name, 'operator', :unit, 'Active')
+                                ");
+                                $ins->execute([
+                                    ':uid' => $worker['unique_id'],
+                                    ':pass' => $passHash,
+                                    ':name' => $worker['name'],
+                                    ':unit' => $worker['unit']
+                                ]);
+                                $response = [
+                                    'success' => true,
+                                    'message' => "Password created for employee {$worker['name']} ({$worker['unique_id']})! Please sign in.",
+                                    'action_type' => 'set_password'
+                                ];
+                            }
                         } else {
                             $response['message'] = "No user or employee found matching '{$username}'.";
                         }
@@ -234,38 +260,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $worker = $wStmt->fetch(PDO::FETCH_ASSOC);
 
                     if ($worker) {
-                        $checkExisting = $pdo->prepare("SELECT * FROM users WHERE LOWER(username) = LOWER(:uid) OR LOWER(full_name) = LOWER(:name) LIMIT 1");
-                        $checkExisting->execute([':uid' => $worker['unique_id'], ':name' => $worker['name']]);
-                        $user = $checkExisting->fetch(PDO::FETCH_ASSOC);
+                        if (isset($worker['status']) && strcasecmp($worker['status'], 'Inactive') === 0) {
+                            $displayName = $worker['name'] ?: $worker['unique_id'];
+                            $response['message'] = "Account deactivated: Worker '{$displayName}' ({$worker['unique_id']}) is currently marked as Inactive. Login is disabled. Please contact the administrator.";
+                            $user = null;
+                        } else {
+                            $checkExisting = $pdo->prepare("SELECT * FROM users WHERE LOWER(username) = LOWER(:uid) OR LOWER(full_name) = LOWER(:name) LIMIT 1");
+                            $checkExisting->execute([':uid' => $worker['unique_id'], ':name' => $worker['name']]);
+                            $user = $checkExisting->fetch(PDO::FETCH_ASSOC);
 
-                        if (!$user) {
-                            $passHash = password_hash($password, PASSWORD_DEFAULT);
-                            $ins = $pdo->prepare("
-                                INSERT INTO users (username, password, full_name, role, unit)
-                                VALUES (:uid, :pass, :name, 'operator', :unit)
-                            ");
-                            $ins->execute([
-                                ':uid' => $worker['unique_id'],
-                                ':pass' => $passHash,
-                                ':name' => $worker['name'],
-                                ':unit' => $worker['unit']
-                            ]);
-                            $newUid = $pdo->lastInsertId();
-                            $user = [
-                                'id' => $newUid,
-                                'username' => $worker['unique_id'],
-                                'password' => $passHash,
-                                'full_name' => $worker['name'],
-                                'role' => 'operator',
-                                'unit' => $worker['unit']
-                            ];
+                            if (!$user) {
+                                $passHash = password_hash($password, PASSWORD_DEFAULT);
+                                $ins = $pdo->prepare("
+                                    INSERT INTO users (username, password, full_name, role, unit, status)
+                                    VALUES (:uid, :pass, :name, 'operator', :unit, 'Active')
+                                ");
+                                $ins->execute([
+                                    ':uid' => $worker['unique_id'],
+                                    ':pass' => $passHash,
+                                    ':name' => $worker['name'],
+                                    ':unit' => $worker['unit']
+                                ]);
+                                $newUid = $pdo->lastInsertId();
+                                $user = [
+                                    'id' => $newUid,
+                                    'username' => $worker['unique_id'],
+                                    'password' => $passHash,
+                                    'full_name' => $worker['name'],
+                                    'role' => 'operator',
+                                    'unit' => $worker['unit'],
+                                    'status' => 'Active'
+                                ];
+                            }
                         }
                     }
                 }
 
                 // Step 3: Verify credentials
                 if ($user) {
-                    if (password_verify($password, $user['password'])) {
+                    $isUserInactive = (isset($user['status']) && strcasecmp($user['status'], 'Inactive') === 0);
+
+                    // Cross-check associated worker profile status
+                    $wFind = $pdo->prepare("SELECT id, unit, status FROM workers WHERE LOWER(unique_id) = LOWER(:uid) OR LOWER(name) = LOWER(:name) LIMIT 1");
+                    $wFind->execute([':uid' => $user['username'], ':name' => $user['full_name']]);
+                    $workerRow = $wFind->fetch(PDO::FETCH_ASSOC);
+                    $isWorkerInactive = ($workerRow && isset($workerRow['status']) && strcasecmp($workerRow['status'], 'Inactive') === 0);
+
+                    if ($isUserInactive || $isWorkerInactive) {
+                        $displayName = $user['full_name'] ?: $user['username'];
+                        $response['message'] = "Account deactivated: '{$displayName}' ({$user['username']}) is currently marked as Inactive. Login is disabled. Please contact the administrator.";
+                    } elseif (password_verify($password, $user['password'])) {
+                        $now = date('Y-m-d H:i:s');
+                        try {
+                            $updUser = $pdo->prepare("UPDATE users SET last_login = :now WHERE id = :id");
+                            $updUser->execute([':now' => $now, ':id' => $user['id']]);
+                        } catch (Exception $e) {}
+
                         $_SESSION['user_id'] = $user['id'];
                         $_SESSION['username'] = $user['username'];
                         $_SESSION['full_name'] = $user['full_name'];
@@ -280,6 +330,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             if (empty($_SESSION['unit']) || $_SESSION['unit'] === 'All') {
                                 $_SESSION['unit'] = $workerRow['unit'];
                             }
+                            try {
+                                $updWorker = $pdo->prepare("UPDATE workers SET last_login = :now WHERE id = :wid");
+                                $updWorker->execute([':now' => $now, ':wid' => $workerRow['id']]);
+                            } catch (Exception $e) {}
                         }
 
                         // Determine smart redirect target based on user role and permissions

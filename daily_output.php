@@ -192,6 +192,7 @@ foreach ($todayLogs as $l) {
 $catStmt = $pdo->query("SELECT id, category_name, subcategory_name, sub_subcategory_name FROM garment_categories WHERE status = 'Active' ORDER BY category_name ASC, subcategory_name ASC, sub_subcategory_name ASC");
 $garmentTree = [];
 $adminCategoryChips = [];
+$adminSubcategoryChips = [];
 $catPalette = [
     ['icon' => 'fa-vest-patches', 'color' => '#10b981'],
     ['icon' => 'fa-baby', 'color' => '#ec4899'],
@@ -205,6 +206,49 @@ $catPalette = [
     ['icon' => 'fa-cubes', 'color' => '#e11d48']
 ];
 $palIdx = 0;
+
+// Fetch active work assignment for selected worker
+$workerAssignment = null;
+if ($selectedWorkerId > 0) {
+    try {
+        $assignStmt = $pdo->prepare("
+            SELECT * FROM worker_work_assignments 
+            WHERE worker_id = :wid AND assigned_date = :adate AND status = 'Active' 
+            ORDER BY id DESC LIMIT 1
+        ");
+        $assignStmt->execute([
+            ':wid' => $selectedWorkerId,
+            ':adate' => $selectedDate
+        ]);
+        $workerAssignment = $assignStmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$workerAssignment) {
+            $assignStmt2 = $pdo->prepare("
+                SELECT * FROM worker_work_assignments 
+                WHERE worker_id = :wid AND status = 'Active' 
+                ORDER BY id DESC LIMIT 1
+            ");
+            $assignStmt2->execute([':wid' => $selectedWorkerId]);
+            $workerAssignment = $assignStmt2->fetch(PDO::FETCH_ASSOC);
+        }
+
+        if (!$workerAssignment && !empty($worker['assigned_category_id'])) {
+            $cStmt = $pdo->prepare("SELECT * FROM garment_categories WHERE id = :cid LIMIT 1");
+            $cStmt->execute([':cid' => (int)$worker['assigned_category_id']]);
+            $cRow = $cStmt->fetch(PDO::FETCH_ASSOC);
+            if ($cRow) {
+                $workerAssignment = [
+                    'category_id' => $cRow['id'],
+                    'category_name' => $cRow['category_name'],
+                    'subcategory_name' => $cRow['subcategory_name'],
+                    'sub_subcategory_name' => $cRow['sub_subcategory_name'] ?? ''
+                ];
+            }
+        }
+    } catch (Exception $e) {}
+}
+
+$workerAssignedSubcategories = [];
 
 while ($catRow = $catStmt->fetch(PDO::FETCH_ASSOC)) {
     $c = trim($catRow['category_name']);
@@ -239,6 +283,55 @@ while ($catRow = $catStmt->fetch(PDO::FETCH_ASSOC)) {
         ];
         $palIdx++;
     }
+
+    // Build Subcategory Chips
+    if ($s !== '') {
+        $sKey = strtolower($s);
+        if (!isset($adminSubcategoryChips[$sKey])) {
+            $sIcon = 'fa-tag';
+            $sCol = '#06b6d4';
+            $lowS = strtolower($s);
+            $lowC = strtolower($c);
+            if (strpos($lowS, 'cotton') !== false || strpos($lowC, 'cotton') !== false || strpos($lowC, 'kurti') !== false) { $sIcon = 'fa-vest-patches'; $sCol = '#10b981'; }
+            elseif (strpos($lowS, 'zip') !== false || strpos($lowC, 'feed') !== false) { $sIcon = 'fa-baby'; $sCol = '#ec4899'; }
+            elseif (strpos($lowS, 'jean') !== false || strpos($lowC, 'denim') !== false) { $sIcon = 'fa-socks'; $sCol = '#38bdf8'; }
+            elseif (strpos($lowS, 'matern') !== false || strpos($lowC, 'matern') !== false) { $sIcon = 'fa-person-pregnant'; $sCol = '#f43f5e'; }
+            elseif (strpos($lowS, 'neck') !== false || strpos($lowC, 'shirt') !== false) { $sIcon = 'fa-shirt'; $sCol = '#a855f7'; }
+            elseif (strpos($lowS, 'frock') !== false || strpos($lowC, 'frock') !== false) { $sIcon = 'fa-child-dress'; $sCol = '#f59e0b'; }
+            elseif (strpos($lowS, 'pajama') !== false || strpos($lowC, 'pajama') !== false) { $sIcon = 'fa-moon'; $sCol = '#6366f1'; }
+
+            $subChipItem = [
+                'name' => $s,
+                'category_name' => $c,
+                'garment_type' => $subsub,
+                'icon' => $sIcon,
+                'color' => $sCol
+            ];
+            $adminSubcategoryChips[$sKey] = $subChipItem;
+
+            if ($workerAssignment && (
+                strcasecmp($workerAssignment['category_name'], $c) === 0 || 
+                strcasecmp($workerAssignment['subcategory_name'], $s) === 0
+            )) {
+                $workerAssignedSubcategories[$sKey] = $subChipItem;
+            }
+        }
+    }
+}
+
+// User role check (operator/worker or non-admin)
+$isUserRole = ($currentUser && $currentUser['role'] !== 'admin');
+$hasAssignedWork = !empty($workerAssignment);
+$showSubcategoriesOnly = $isUserRole || $hasAssignedWork;
+
+if ($showSubcategoriesOnly) {
+    if ($hasAssignedWork && !empty($workerAssignedSubcategories)) {
+        $chipsToDisplay = $workerAssignedSubcategories;
+    } else {
+        $chipsToDisplay = $adminSubcategoryChips;
+    }
+} else {
+    $chipsToDisplay = $adminCategoryChips;
 }
 
 include __DIR__ . '/includes/header.php';
@@ -251,6 +344,14 @@ window.currentActiveUnit = <?= json_encode($activeUnit) ?>;
 window.currentSelectedDate = <?= json_encode($selectedDate) ?>;
 window.isCurrentDateToday = <?= json_encode($selectedDate === date('Y-m-d')) ?>;
 window.lastLoggedMaterial = <?= json_encode(!empty($todayLogs) ? $todayLogs[0]['material_name'] : null) ?>;
+window.isUserRole = <?= json_encode($isUserRole) ?>;
+window.hasAssignedWork = <?= json_encode($hasAssignedWork) ?>;
+window.showSubcategoriesOnly = <?= json_encode($showSubcategoriesOnly) ?>;
+window.assignedCategory = <?= json_encode($workerAssignment['category_name'] ?? null) ?>;
+window.assignedSubcategory = <?= json_encode($workerAssignment['subcategory_name'] ?? null) ?>;
+window.adminCategoryChips = <?= json_encode(array_values($adminCategoryChips)) ?>;
+window.adminSubcategoryChips = <?= json_encode(array_values($adminSubcategoryChips)) ?>;
+window.workerAssignedSubcategories = <?= json_encode(array_values($workerAssignedSubcategories)) ?>;
 
 function filterWorkersByUnit(unitName) {
     const unitInput = document.getElementById('activeUnitInput');
@@ -856,15 +957,54 @@ function filterWorkersByUnit(unitName) {
         <input type="hidden" name="work_date" value="<?= htmlspecialchars($selectedDate) ?>">
         <input type="hidden" id="userClothSelect" name="material_name" required>
 
-        <!-- STEP 1: Quick Garment Tap Chips -->
+        <!-- STEP 1: Quick Garment / Subcategory Tap Chips -->
         <div style="margin-bottom: 1.25rem;">
+            <!-- If worker has assigned work for today, show prominent Assigned Work Banner -->
+            <?php if ($hasAssignedWork && $workerAssignment): ?>
+                <div class="assigned-work-callout" style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.65rem 1rem; margin-bottom: 0.95rem; background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.35); border-radius: var(--radius-md); box-shadow: 0 0 16px rgba(16,185,129,0.12);">
+                    <div style="display: flex; align-items: center; gap: 0.65rem; font-size: 0.84rem; flex-wrap: wrap;">
+                        <span style="display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: rgba(16,185,129,0.2); color: #34d399; font-size: 0.88rem; flex-shrink: 0;">
+                            <i class="fa-solid fa-circle-check"></i>
+                        </span>
+                        <div>
+                            <span style="color: #34d399; font-weight: 700;">Assigned Work for Today:</span>
+                            <span class="badge-pill" style="background: rgba(16,185,129,0.2); color: #34d399; font-weight: 700; margin-left: 0.35rem; border: 1px solid rgba(16,185,129,0.4);">
+                                <i class="fa-solid fa-shirt"></i> <?= htmlspecialchars($workerAssignment['category_name']) ?>
+                            </span>
+                            <?php if (!empty($workerAssignment['subcategory_name'])): ?>
+                                <span style="color: var(--text-muted); margin: 0 0.3rem;">›</span>
+                                <strong style="color: #fff; font-size: 0.88rem;"><?= htmlspecialchars($workerAssignment['subcategory_name']) ?></strong>
+                            <?php endif; ?>
+                            <?php if (!empty($workerAssignment['sub_subcategory_name'])): ?>
+                                <span style="color: var(--text-muted); font-size: 0.78rem; margin-left: 0.25rem;">(<?= htmlspecialchars($workerAssignment['sub_subcategory_name']) ?>)</span>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    <span class="badge-pill" style="font-size: 0.72rem; background: rgba(16,185,129,0.2); color: #34d399; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; border: 1px solid rgba(16,185,129,0.35); flex-shrink: 0;">
+                        <i class="fa-solid fa-bolt"></i> Ready for Stitching
+                    </span>
+                </div>
+            <?php endif; ?>
+
             <div class="uf-section-header">
                 <label class="uf-section-label">
                     <span class="uf-step-badge">1</span>
-                    <span>Select Garment</span>
+                    <span id="step1LabelTitle"><?= $showSubcategoriesOnly ? 'Select Subcategory' : 'Select Garment' ?></span>
                     <span class="required" style="color: var(--accent-rose);">*</span>
                 </label>
                 <div class="uf-garment-actions">
+                    <!-- For admin/supervisor: switch between Subcategories & Categories view -->
+                    <?php if (!$isUserRole): ?>
+                        <div class="mode-toggle-pill-group" style="display: inline-flex; background: rgba(255,255,255,0.04); border: 1px solid var(--border-color); border-radius: 50px; padding: 2px;">
+                            <button type="button" class="btn-mode-pill <?= $showSubcategoriesOnly ? 'active' : '' ?>" id="btnModeSubcat" onclick="switchGarmentViewMode('subcategory')" style="border: none; background: <?= $showSubcategoriesOnly ? 'rgba(16,185,129,0.25)' : 'transparent' ?>; color: <?= $showSubcategoriesOnly ? '#34d399' : 'var(--text-muted)' ?>; font-size: 0.72rem; font-weight: 700; padding: 0.2rem 0.6rem; border-radius: 50px; cursor: pointer;">
+                                Subcategories
+                            </button>
+                            <button type="button" class="btn-mode-pill <?= !$showSubcategoriesOnly ? 'active' : '' ?>" id="btnModeCat" onclick="switchGarmentViewMode('category')" style="border: none; background: <?= !$showSubcategoriesOnly ? 'rgba(6,182,212,0.25)' : 'transparent' ?>; color: <?= !$showSubcategoriesOnly ? '#06b6d4' : 'var(--text-muted)' ?>; font-size: 0.72rem; font-weight: 700; padding: 0.2rem 0.6rem; border-radius: 50px; cursor: pointer;">
+                                All Categories
+                            </button>
+                        </div>
+                    <?php endif; ?>
+
                     <?php if ($currentUser && ($currentUser['role'] === 'admin' || $currentUser['role'] === 'supervisor')): ?>
                         <button type="button" class="btn btn-outline btn-xs" id="btnToggleInlineAddCat" style="font-size: 0.74rem; padding: 0.25rem 0.55rem; border-radius: 8px; color: var(--accent-cyan); border-color: rgba(6,182,212,0.4);" title="Quick add category">
                             <i class="fa-solid fa-circle-plus text-cyan"></i> + Add
@@ -924,15 +1064,15 @@ function filterWorkersByUnit(unitName) {
             </div>
             <?php endif; ?>
 
-            <!-- Quick Chips Grid (Strictly Admin-Added Categories Only) -->
+            <!-- Quick Chips Grid -->
             <div class="garment-quick-chips-grid" id="garmentQuickChipsGrid">
-                <?php if (empty($adminCategoryChips)): ?>
+                <?php if (empty($chipsToDisplay)): ?>
                     <div class="uf-empty-categories-card">
                         <div class="uf-empty-icon-ring">
                             <i class="fa-solid fa-shirt"></i>
                         </div>
-                        <div class="uf-empty-title">No Garment Categories Added Yet</div>
-                        <div class="uf-empty-desc">Add stitching categories (e.g. Nighty, Kurti, T-Shirt) to enable 1-tap quick piece logging.</div>
+                        <div class="uf-empty-title">No Subcategories Available</div>
+                        <div class="uf-empty-desc">Ask your supervisor or admin to assign a work category in Units.</div>
                         <?php if ($currentUser && ($currentUser['role'] === 'admin' || $currentUser['role'] === 'supervisor')): ?>
                             <button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('btnToggleInlineAddCat')?.click();" style="border-radius: 99px; padding: 0.4rem 1.15rem; font-size: 0.8rem; font-weight: 700; display: inline-flex; align-items: center; gap: 0.4rem;">
                                 <i class="fa-solid fa-circle-plus"></i> Add First Garment Category
@@ -940,15 +1080,21 @@ function filterWorkersByUnit(unitName) {
                         <?php endif; ?>
                     </div>
                 <?php else: ?>
-                    <?php foreach ($adminCategoryChips as $g): 
+                    <?php foreach ($chipsToDisplay as $g): 
                         $gCleanKey = strtolower(trim($g['name']));
                         $gTodayCount = $todayMaterialCounts[$gCleanKey] ?? 0;
                         $badgeId = 'chipBadge_' . preg_replace('/[^a-z0-9_]/', '', $gCleanKey);
+                        $parentCat = $g['category_name'] ?? '';
                     ?>
-                        <button type="button" class="garment-chip-btn" data-garment="<?= htmlspecialchars($g['name']) ?>" onclick="selectGarmentChip('<?= htmlspecialchars(addslashes($g['name'])) ?>')" title="Tap to select <?= htmlspecialchars($g['name']) ?>">
+                        <button type="button" class="garment-chip-btn" data-garment="<?= htmlspecialchars($g['name']) ?>" data-category="<?= htmlspecialchars($parentCat) ?>" onclick="selectGarmentChip('<?= htmlspecialchars(addslashes($g['name'])) ?>', '<?= htmlspecialchars(addslashes($parentCat)) ?>')" title="Tap to select <?= htmlspecialchars($g['name']) ?>">
                             <div style="display: flex; align-items: center; gap: 0.5rem; min-width: 0;">
                                 <i class="fa-solid <?= $g['icon'] ?> garment-chip-icon" style="color: <?= $g['color'] ?>;"></i>
-                                <span class="garment-chip-title"><?= htmlspecialchars($g['name']) ?></span>
+                                <div style="display: flex; flex-direction: column; text-align: left; min-width: 0;">
+                                    <span class="garment-chip-title" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"><?= htmlspecialchars($g['name']) ?></span>
+                                    <?php if (!empty($parentCat) && $showSubcategoriesOnly): ?>
+                                        <span style="font-size: 0.68rem; color: var(--text-muted); opacity: 0.85; font-weight: normal;"><?= htmlspecialchars($parentCat) ?></span>
+                                    <?php endif; ?>
+                                </div>
                             </div>
                             <span class="garment-chip-count-badge" id="<?= $badgeId ?>" style="font-size: 0.72rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 50px; background: <?= $gTodayCount > 0 ? 'rgba(16,185,129,0.22)' : 'rgba(255,255,255,0.06)' ?>; color: <?= $gTodayCount > 0 ? '#10b981' : 'var(--text-muted)' ?>; border: 1px solid <?= $gTodayCount > 0 ? 'rgba(16,185,129,0.45)' : 'rgba(255,255,255,0.08)' ?>; white-space: nowrap; flex-shrink: 0;">
                                 <?= $gTodayCount > 0 ? ($gTodayCount . ' pcs') : '0 pcs' ?>
@@ -1734,18 +1880,26 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Fast 1-Tap Garment Chip Selection
-    window.selectGarmentChip = function(matName) {
+    window.selectGarmentChip = function(matName, parentCatName = '') {
         if (!matName) return;
 
         // 1. Highlight clicked chip
         const allChips = document.querySelectorAll('.garment-chip-btn');
+        let foundParentCat = parentCatName;
         allChips.forEach(btn => {
             if (btn.dataset.garment && btn.dataset.garment.toLowerCase() === matName.toLowerCase()) {
                 btn.classList.add('active');
+                if (!foundParentCat && btn.dataset.category) {
+                    foundParentCat = btn.dataset.category;
+                }
             } else {
                 btn.classList.remove('active');
             }
         });
+
+        if (!foundParentCat && window.assignedCategory) {
+            foundParentCat = window.assignedCategory;
+        }
 
         // 2. Set hidden cloth select value
         if (clothSelect) clothSelect.value = matName;
@@ -1753,7 +1907,13 @@ document.addEventListener('DOMContentLoaded', () => {
         // 3. Update breadcrumb and active indicator
         const displayNameEl = document.getElementById('selectedGarmentDisplayName');
         if (displayNameEl) displayNameEl.innerText = matName;
-        if (breadcrumbText) breadcrumbText.innerText = '';
+        if (breadcrumbText) {
+            if (foundParentCat && foundParentCat.toLowerCase() !== matName.toLowerCase()) {
+                breadcrumbText.innerText = `(${foundParentCat} › ${matName})`;
+            } else {
+                breadcrumbText.innerText = '';
+            }
+        }
         if (breadcrumbBox) breadcrumbBox.style.display = 'flex';
 
         // 4. Load today's count for this garment & shift
@@ -1776,6 +1936,37 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             localStorage.setItem('fabriqpro_last_garment_' + currentWorkerId, matName);
         } catch (e) {}
+    };
+
+    window.currentChipsMode = window.showSubcategoriesOnly ? 'subcategory' : 'category';
+
+    window.switchGarmentViewMode = function(mode) {
+        window.currentChipsMode = mode;
+        const btnSub = document.getElementById('btnModeSubcat');
+        const btnCat = document.getElementById('btnModeCat');
+        const titleLabel = document.getElementById('step1LabelTitle');
+
+        if (btnSub && btnCat) {
+            if (mode === 'subcategory') {
+                btnSub.classList.add('active');
+                btnSub.style.background = 'rgba(16,185,129,0.25)';
+                btnSub.style.color = '#34d399';
+                btnCat.classList.remove('active');
+                btnCat.style.background = 'transparent';
+                btnCat.style.color = 'var(--text-muted)';
+                if (titleLabel) titleLabel.innerText = 'Select Subcategory';
+            } else {
+                btnCat.classList.add('active');
+                btnCat.style.background = 'rgba(6,182,212,0.25)';
+                btnCat.style.color = '#06b6d4';
+                btnSub.classList.remove('active');
+                btnSub.style.background = 'transparent';
+                btnSub.style.color = 'var(--text-muted)';
+                if (titleLabel) titleLabel.innerText = 'Select Garment';
+            }
+        }
+
+        renderGarmentChips(dynamicGarmentTree);
     };
 
     // Toggle Expandable Advanced 3-Tier Garment Selectors
@@ -2676,63 +2867,76 @@ document.addEventListener('DOMContentLoaded', () => {
         populateTier1(tree, selectedCat, selectedSub, selectedGarment);
     }
 
-    // Dynamic Client-side Quick Garment Chips Renderer (Strictly Admin-Added Categories)
+    // Dynamic Client-side Quick Garment Chips Renderer (Subcategories vs Categories)
     function renderGarmentChips(tree, targetToSelect = null) {
         const grid = document.getElementById('garmentQuickChipsGrid');
         if (!grid) return;
 
         dynamicGarmentTree = tree || {};
-        const catKeys = Object.keys(dynamicGarmentTree);
+        const mode = window.currentChipsMode || (window.showSubcategoriesOnly ? 'subcategory' : 'category');
 
-        if (catKeys.length === 0) {
+        let chipsList = [];
+        if (mode === 'subcategory') {
+            if (window.hasAssignedWork && window.workerAssignedSubcategories && window.workerAssignedSubcategories.length > 0) {
+                chipsList = window.workerAssignedSubcategories;
+            } else if (window.adminSubcategoryChips && window.adminSubcategoryChips.length > 0) {
+                chipsList = window.adminSubcategoryChips;
+            } else {
+                Object.keys(dynamicGarmentTree).forEach(cName => {
+                    Object.keys(dynamicGarmentTree[cName]).forEach(sName => {
+                        chipsList.push({
+                            name: sName,
+                            category_name: cName,
+                            icon: 'fa-tag',
+                            color: '#06b6d4'
+                        });
+                    });
+                });
+            }
+        } else {
+            if (window.adminCategoryChips && window.adminCategoryChips.length > 0) {
+                chipsList = window.adminCategoryChips;
+            } else {
+                Object.keys(dynamicGarmentTree).forEach(cName => {
+                    chipsList.push({
+                        name: cName,
+                        category_name: '',
+                        icon: 'fa-shirt',
+                        color: '#a855f7'
+                    });
+                });
+            }
+        }
+
+        if (chipsList.length === 0) {
             grid.innerHTML = `
                 <div style="grid-column: 1 / -1; padding: 1.25rem; text-align: center; color: var(--text-muted); background: rgba(255,255,255,0.02); border: 1px dashed var(--border-color); border-radius: var(--radius-md); font-size: 0.85rem;">
                     <i class="fa-solid fa-inbox" style="font-size: 1.5rem; display: block; margin-bottom: 0.4rem; opacity: 0.5;"></i>
-                    No garment categories added yet by admin.
-                    <br><span style="color: var(--accent-cyan); font-weight: 600; cursor: pointer;" onclick="document.getElementById('btnToggleInlineAddCat')?.click();">Click here to add category &amp; subcategory</span>
+                    No items available.
                 </div>
             `;
             return;
         }
 
-        const catPalette = [
-            { icon: 'fa-vest-patches', color: '#10b981' },
-            { icon: 'fa-baby', color: '#ec4899' },
-            { icon: 'fa-socks', color: '#38bdf8' },
-            { icon: 'fa-person-pregnant', color: '#f43f5e' },
-            { icon: 'fa-shirt', color: '#a855f7' },
-            { icon: 'fa-moon', color: '#fbbf24' },
-            { icon: 'fa-tag', color: '#06b6d4' },
-            { icon: 'fa-layer-group', color: '#6366f1' },
-            { icon: 'fa-vest', color: '#14b8a6' },
-            { icon: 'fa-cubes', color: '#e11d48' }
-        ];
-
         let html = '';
-        catKeys.forEach((catName, idx) => {
-            const pal = catPalette[idx % catPalette.length];
-            let ic = pal.icon;
-            let col = pal.color;
-            const low = catName.toLowerCase();
-            if (low.includes('kurti') || low.includes('cotton')) { ic = 'fa-vest-patches'; col = '#10b981'; }
-            else if (low.includes('feed')) { ic = 'fa-baby'; col = '#ec4899'; }
-            else if (low.includes('jean') || low.includes('denim')) { ic = 'fa-socks'; col = '#38bdf8'; }
-            else if (low.includes('matern')) { ic = 'fa-person-pregnant'; col = '#f43f5e'; }
-            else if (low.includes('shirt') || low.includes('tunic')) { ic = 'fa-shirt'; col = '#a855f7'; }
-            else if (low.includes('night')) { ic = 'fa-moon'; col = '#fbbf24'; }
-
-            const gCleanKey = catName.toLowerCase().trim();
+        chipsList.forEach(item => {
+            const itemName = item.name;
+            const parentCat = item.category_name || '';
+            const gCleanKey = itemName.toLowerCase().trim();
             const gTodayCount = (window.todayMaterialCounts && window.todayMaterialCounts[gCleanKey]) ? window.todayMaterialCounts[gCleanKey] : 0;
             const badgeId = 'chipBadge_' + gCleanKey.replace(/[^a-z0-9_]/g, '');
 
-            const isSelected = clothSelect && clothSelect.value && clothSelect.value.toLowerCase() === catName.toLowerCase();
+            const isSelected = clothSelect && clothSelect.value && clothSelect.value.toLowerCase() === itemName.toLowerCase();
             const activeClass = isSelected ? 'active' : '';
 
             html += `
-                <button type="button" class="garment-chip-btn ${activeClass}" data-garment="${escapeHtml(catName)}" title="Tap to select ${escapeHtml(catName)}">
+                <button type="button" class="garment-chip-btn ${activeClass}" data-garment="${escapeHtml(itemName)}" data-category="${escapeHtml(parentCat)}" title="Tap to select ${escapeHtml(itemName)}">
                     <div style="display: flex; align-items: center; gap: 0.5rem; min-width: 0;">
-                        <i class="fa-solid ${ic} garment-chip-icon" style="color: ${col};"></i>
-                        <span class="garment-chip-title">${escapeHtml(catName)}</span>
+                        <i class="fa-solid ${item.icon || 'fa-tag'} garment-chip-icon" style="color: ${item.color || '#06b6d4'};"></i>
+                        <div style="display: flex; flex-direction: column; text-align: left; min-width: 0;">
+                            <span class="garment-chip-title" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(itemName)}</span>
+                            ${parentCat && mode === 'subcategory' ? `<span style="font-size: 0.68rem; color: var(--text-muted); opacity: 0.85; font-weight: normal;">${escapeHtml(parentCat)}</span>` : ''}
+                        </div>
                     </div>
                     <span class="garment-chip-count-badge" id="${badgeId}" style="font-size: 0.72rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 50px; background: ${gTodayCount > 0 ? 'rgba(16,185,129,0.22)' : 'rgba(255,255,255,0.06)'}; color: ${gTodayCount > 0 ? '#10b981' : 'var(--text-muted)'}; border: 1px solid ${gTodayCount > 0 ? 'rgba(16,185,129,0.45)' : 'rgba(255,255,255,0.08)'}; white-space: nowrap; flex-shrink: 0;">
                         ${gTodayCount > 0 ? (gTodayCount + ' pcs') : '0 pcs'}
@@ -2746,7 +2950,7 @@ document.addEventListener('DOMContentLoaded', () => {
         grid.querySelectorAll('.garment-chip-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 if (btn.dataset.garment && typeof window.selectGarmentChip === 'function') {
-                    window.selectGarmentChip(btn.dataset.garment);
+                    window.selectGarmentChip(btn.dataset.garment, btn.dataset.category || '');
                 }
             });
         });
@@ -2925,9 +3129,16 @@ document.addEventListener('DOMContentLoaded', () => {
     // Auto-select garment: restores existing active category on refresh / login
     setTimeout(() => {
         let targetGarment = '';
-        try {
-            targetGarment = localStorage.getItem('fabriqpro_last_garment_' + currentWorkerId);
-        } catch (e) {}
+        // 1. Priority 1: Worker's assigned work subcategory for today
+        if (window.assignedSubcategory) {
+            targetGarment = window.assignedSubcategory;
+        }
+
+        if (!targetGarment) {
+            try {
+                targetGarment = localStorage.getItem('fabriqpro_last_garment_' + currentWorkerId);
+            } catch (e) {}
+        }
 
         if (!targetGarment && window.lastLoggedMaterial) {
             targetGarment = window.lastLoggedMaterial;
@@ -2947,7 +3158,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        // Default to first available chip (e.g. Cotton Kurtis or Nighty)
+        // Default to first available chip
         if (!targetGarment) {
             const firstChip = document.querySelector('.garment-chip-btn');
             if (firstChip && firstChip.dataset.garment) {
@@ -2956,7 +3167,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (targetGarment && typeof window.selectGarmentChip === 'function') {
-            window.selectGarmentChip(targetGarment);
+            const matchingChip = document.querySelector(`.garment-chip-btn[data-garment="${targetGarment}" i]`);
+            const pCat = matchingChip ? (matchingChip.dataset.category || '') : (window.assignedCategory || '');
+            window.selectGarmentChip(targetGarment, pCat);
         }
 
         // Check if cooldown timer was active from previous action

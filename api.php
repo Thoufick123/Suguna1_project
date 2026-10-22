@@ -45,7 +45,7 @@ $adminActions = [
     'add_production_unit', 'delete_production_unit', 'toggle_unit_status', 'edit_production_unit',
     'update_user_credentials', 'clear_system_data', 'quick_add_user',
     'toggle_user_status', 'delete_user_worker', 'transfer_user_unit',
-    'update_cooldown_settings'
+    'update_cooldown_settings', 'assign_worker_category', 'toggle_worker_active'
 ];
 
 if (in_array($action, $adminActions)) {
@@ -62,6 +62,34 @@ if (in_array($action, $adminActions)) {
 
 try {
     $pdo = Database::getConnection();
+
+    $unitsMap = [];
+    try {
+        $pUnits = $pdo->query("SELECT unit_name, unit_code FROM production_units")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($pUnits as $pu) {
+            $unitsMap[strtoupper($pu['unit_code'])] = $pu['unit_name'];
+        }
+    } catch (Exception $e) {}
+
+    $deriveSwitched = function(&$w) use ($unitsMap) {
+        $transFrom = trim($w['transferred_from'] ?? '');
+        if (empty($transFrom)) {
+            if (preg_match('/^(PU\d{3})/i', $w['unique_id'] ?? '', $m)) {
+                $code = strtoupper($m[1]);
+                if (isset($unitsMap[$code])) {
+                    $orig = $unitsMap[$code];
+                    $origNorm = preg_replace('/[^a-z0-9]/', '', strtolower($orig));
+                    $currNorm = preg_replace('/[^a-z0-9]/', '', strtolower($w['unit'] ?? ''));
+                    if ($origNorm !== $currNorm) {
+                        $transFrom = $orig;
+                    }
+                }
+            }
+        }
+        $w['is_switched'] = !empty($transFrom);
+        $w['transferred_from'] = $transFrom;
+        $w['transfer_type'] = $w['transfer_type'] ?? ($w['is_switched'] ? 'temporary' : '');
+    };
 
     switch ($action) {
 
@@ -689,34 +717,6 @@ try {
             $stmt->execute($params);
             $workers = $stmt->fetchAll();
 
-            // Fetch production units code map for derivation
-            $unitsMap = [];
-            try {
-                $pUnits = $pdo->query("SELECT unit_name, unit_code FROM production_units")->fetchAll(PDO::FETCH_ASSOC);
-                foreach ($pUnits as $pu) {
-                    $unitsMap[strtoupper($pu['unit_code'])] = $pu['unit_name'];
-                }
-            } catch (Exception $e) {}
-
-            $deriveSwitched = function(&$w) use ($unitsMap) {
-                $transFrom = trim($w['transferred_from'] ?? '');
-                if (empty($transFrom)) {
-                    if (preg_match('/^(PU\d{3})/i', $w['unique_id'] ?? '', $m)) {
-                        $code = strtoupper($m[1]);
-                        if (isset($unitsMap[$code])) {
-                            $orig = $unitsMap[$code];
-                            $origNorm = preg_replace('/[^a-z0-9]/', '', strtolower($orig));
-                            $currNorm = preg_replace('/[^a-z0-9]/', '', strtolower($w['unit'] ?? ''));
-                            if ($origNorm !== $currNorm) {
-                                $transFrom = $orig;
-                            }
-                        }
-                    }
-                }
-                $w['is_switched'] = !empty($transFrom);
-                $w['transferred_from'] = $transFrom;
-                $w['transfer_type'] = $w['transfer_type'] ?? ($w['is_switched'] ? 'temporary' : '');
-            };
 
             // Add ranks
             $rank = 1;
@@ -2117,6 +2117,12 @@ try {
             $username = trim($requestData['username'] ?? '');
             $newStatus = trim($requestData['new_status'] ?? '');
 
+            // Prevent deactivating root administrator
+            if ($userId === 1 || strcasecmp($username, 'admin') === 0) {
+                echo json_encode(['success' => false, 'message' => 'Primary Administrator account cannot be deactivated.']);
+                exit;
+            }
+
             // Find current status if not supplied
             $currentStatus = 'Active';
             if ($workerId > 0) {
@@ -2139,6 +2145,8 @@ try {
 
             if (empty($newStatus)) {
                 $newStatus = (strcasecmp($currentStatus, 'Active') === 0) ? 'Inactive' : 'Active';
+            } else {
+                $newStatus = (strcasecmp($newStatus, 'Inactive') === 0) ? 'Inactive' : 'Active';
             }
 
             // Update workers table
@@ -2147,15 +2155,18 @@ try {
                 $updW->execute([':st' => $newStatus, ':id' => $workerId]);
             }
             if (!empty($username)) {
-                $updW2 = $pdo->prepare("UPDATE workers SET status = :st WHERE LOWER(unique_id) = LOWER(:u)");
+                $updW2 = $pdo->prepare("UPDATE workers SET status = :st WHERE LOWER(unique_id) = LOWER(:u) OR LOWER(name) = LOWER(:u)");
                 $updW2->execute([':st' => $newStatus, ':u' => $username]);
+            }
 
-                // Update users table
-                $updU = $pdo->prepare("UPDATE users SET status = :st WHERE LOWER(username) = LOWER(:u)");
-                $updU->execute([':st' => $newStatus, ':u' => $username]);
-            } elseif ($userId > 0) {
+            // Update users table
+            if ($userId > 0) {
                 $updU2 = $pdo->prepare("UPDATE users SET status = :st WHERE id = :id");
                 $updU2->execute([':st' => $newStatus, ':id' => $userId]);
+            }
+            if (!empty($username)) {
+                $updU = $pdo->prepare("UPDATE users SET status = :st WHERE LOWER(username) = LOWER(:u) OR LOWER(full_name) = LOWER(:u)");
+                $updU->execute([':st' => $newStatus, ':u' => $username]);
             }
 
             echo json_encode([
@@ -2345,6 +2356,202 @@ try {
             echo json_encode([
                 'success' => true,
                 'message' => 'User deleted successfully.'
+            ]);
+            break;
+
+        // ==========================================
+        // TOGGLE WORKER ACTIVE STATUS (LOGIN SIMULATION / OVERRIDE)
+        // ==========================================
+        case 'toggle_worker_active':
+            $workerId = (int)($requestData['worker_id'] ?? 0);
+            if ($workerId <= 0) {
+                echo json_encode(['success' => false, 'message' => 'Worker ID is required.']);
+                exit;
+            }
+
+            $wStmt = $pdo->prepare("SELECT id, name, unique_id, last_login FROM workers WHERE id = :wid");
+            $wStmt->execute([':wid' => $workerId]);
+            $worker = $wStmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$worker) {
+                echo json_encode(['success' => false, 'message' => 'Worker not found.']);
+                exit;
+            }
+
+            $isActiveToday = (!empty($worker['last_login']) && date('Y-m-d', strtotime($worker['last_login'])) === date('Y-m-d'));
+
+            if (isset($requestData['status'])) {
+                $statusVal = strtolower(trim((string)$requestData['status']));
+                $makeActive = in_array($statusVal, ['1', 'true', 'active']);
+            } else {
+                $makeActive = !$isActiveToday;
+            }
+
+            $now = $makeActive ? date('Y-m-d H:i:s') : null;
+
+            $pdo->prepare("UPDATE workers SET last_login = :ll WHERE id = :wid")->execute([':ll' => $now, ':wid' => $workerId]);
+            $pdo->prepare("UPDATE users SET last_login = :ll WHERE LOWER(username) = LOWER(:uid) OR LOWER(full_name) = LOWER(:name)")
+                ->execute([':ll' => $now, ':uid' => $worker['unique_id'], ':name' => $worker['name']]);
+
+            echo json_encode([
+                'success' => true,
+                'is_active' => $makeActive,
+                'last_login' => $now,
+                'formatted_time' => $makeActive ? date('h:i A') : null,
+                'worker_id' => $workerId,
+                'worker_name' => $worker['name'],
+                'message' => $makeActive ? "Worker '{$worker['name']}' is now active for today." : "Worker '{$worker['name']}' is marked inactive for today."
+            ]);
+            break;
+
+        // ==========================================
+        // ASSIGN WORK CATEGORY TO WORKER
+        // ==========================================
+        case 'assign_worker_category':
+            $workerId = (int)($requestData['worker_id'] ?? 0);
+            $catId = !empty($requestData['category_id']) ? (int)$requestData['category_id'] : null;
+            $catName = trim($requestData['category_name'] ?? '');
+            $subcatName = trim($requestData['subcategory_name'] ?? '');
+            $subsubName = trim($requestData['sub_subcategory_name'] ?? '');
+            $notes = trim($requestData['notes'] ?? '');
+
+            if ($workerId <= 0) {
+                echo json_encode(['success' => false, 'message' => 'Worker ID is required.']);
+                exit;
+            }
+
+            if ($catId && empty($catName)) {
+                $cStmt = $pdo->prepare("SELECT category_name, subcategory_name, sub_subcategory_name FROM garment_categories WHERE id = :cid LIMIT 1");
+                $cStmt->execute([':cid' => $catId]);
+                $cRow = $cStmt->fetch(PDO::FETCH_ASSOC);
+                if ($cRow) {
+                    $catName = $cRow['category_name'];
+                    $subcatName = $cRow['subcategory_name'];
+                    $subsubName = $cRow['sub_subcategory_name'];
+                }
+            }
+
+            if (empty($catName)) {
+                echo json_encode(['success' => false, 'message' => 'Garment Category Name is required to assign work.']);
+                exit;
+            }
+
+            $wStmt = $pdo->prepare("SELECT id, name, unique_id, unit FROM workers WHERE id = :wid");
+            $wStmt->execute([':wid' => $workerId]);
+            $worker = $wStmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$worker) {
+                echo json_encode(['success' => false, 'message' => 'Worker not found.']);
+                exit;
+            }
+
+            $parts = array_filter([$catName, $subcatName, $subsubName]);
+            $assignedWorkStr = implode(' - ', $parts);
+
+            $assignedBy = $currentUser['username'] ?? 'admin';
+            $today = date('Y-m-d');
+            $now = date('Y-m-d H:i:s');
+
+            $insAssign = $pdo->prepare("
+                INSERT INTO worker_work_assignments 
+                    (worker_id, category_id, category_name, subcategory_name, sub_subcategory_name, assigned_date, assigned_by, status, notes)
+                VALUES 
+                    (:wid, :cid, :cname, :subname, :subsubname, :adate, :aby, 'Active', :notes)
+            ");
+            $insAssign->execute([
+                ':wid' => $workerId,
+                ':cid' => $catId,
+                ':cname' => $catName,
+                ':subname' => $subcatName,
+                ':subsubname' => $subsubName,
+                ':adate' => $today,
+                ':aby' => $assignedBy,
+                ':notes' => $notes
+            ]);
+            $assignmentId = $pdo->lastInsertId();
+
+            $updWorker = $pdo->prepare("
+                UPDATE workers 
+                SET assigned_work = :work, assigned_category_id = :cid, assigned_at = :now 
+                WHERE id = :wid
+            ");
+            $updWorker->execute([
+                ':work' => $assignedWorkStr,
+                ':cid' => $catId,
+                ':now' => $now,
+                ':wid' => $workerId
+            ]);
+
+            echo json_encode([
+                'success' => true,
+                'assignment_id' => $assignmentId,
+                'worker_id' => $workerId,
+                'worker_name' => $worker['name'],
+                'category_name' => $catName,
+                'subcategory_name' => $subcatName,
+                'sub_subcategory_name' => $subsubName,
+                'assigned_work' => $assignedWorkStr,
+                'assigned_at' => $now,
+                'formatted_time' => date('h:i A'),
+                'message' => "Category '{$catName}' assigned to {$worker['name']} ({$worker['unique_id']}) successfully!"
+            ]);
+            break;
+
+        // ==========================================
+        // GET WORKER ASSIGNED WORK & ACTIVE CATEGORIES
+        // ==========================================
+        case 'get_worker_assigned_work':
+            $workerId = (int)($requestData['worker_id'] ?? 0);
+            if ($workerId <= 0) {
+                echo json_encode(['success' => false, 'message' => 'Worker ID is required.']);
+                exit;
+            }
+
+            $wStmt = $pdo->prepare("
+                SELECT w.id, w.name, w.unique_id, w.unit, w.role, w.assigned_work, w.assigned_category_id, w.assigned_at, w.last_login,
+                       (SELECT last_login FROM users WHERE LOWER(username) = LOWER(w.unique_id) OR LOWER(full_name) = LOWER(w.name) LIMIT 1) as user_last_login
+                FROM workers w 
+                WHERE w.id = :wid
+            ");
+            $wStmt->execute([':wid' => $workerId]);
+            $worker = $wStmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$worker) {
+                echo json_encode(['success' => false, 'message' => 'Worker not found.']);
+                exit;
+            }
+
+            $effectiveLogin = $worker['last_login'] ?: $worker['user_last_login'];
+            $isActiveToday = (!empty($effectiveLogin) && date('Y-m-d', strtotime($effectiveLogin)) === date('Y-m-d'));
+
+            $assignStmt = $pdo->prepare("
+                SELECT * FROM worker_work_assignments 
+                WHERE worker_id = :wid 
+                ORDER BY id DESC LIMIT 10
+            ");
+            $assignStmt->execute([':wid' => $workerId]);
+            $history = $assignStmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $categoriesStmt = $pdo->query("SELECT id, category_name, subcategory_name, sub_subcategory_name, status FROM garment_categories WHERE status = 'Active' ORDER BY category_name ASC, subcategory_name ASC");
+            $allCats = $categoriesStmt->fetchAll(PDO::FETCH_ASSOC);
+
+            echo json_encode([
+                'success' => true,
+                'worker' => [
+                    'id' => (int)$worker['id'],
+                    'name' => $worker['name'],
+                    'unique_id' => $worker['unique_id'],
+                    'unit' => $worker['unit'],
+                    'role' => $worker['role'],
+                    'assigned_work' => $worker['assigned_work'],
+                    'assigned_category_id' => $worker['assigned_category_id'],
+                    'assigned_at' => $worker['assigned_at'],
+                    'last_login' => $effectiveLogin,
+                    'is_active_today' => $isActiveToday,
+                    'formatted_login' => (!empty($effectiveLogin) ? date('h:i A', strtotime($effectiveLogin)) : null)
+                ],
+                'history' => $history,
+                'categories' => $allCats
             ]);
             break;
 

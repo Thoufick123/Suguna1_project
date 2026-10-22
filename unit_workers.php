@@ -75,18 +75,31 @@ $avgExpStmt = $pdo->prepare("SELECT AVG(experience_years) FROM workers WHERE uni
 $avgExpStmt->execute([':unit' => $requestedUnit]);
 $avgExp = round($avgExpStmt->fetchColumn() ?: 0, 1);
 
-// Fetch all registered workers for this unit
+// Fetch all registered workers for this unit including last_login and assigned work
 $workersStmt = $pdo->prepare("
     SELECT 
         w.*,
         (SELECT COUNT(*) FROM piece_logs WHERE worker_id = w.id) as total_entries,
-        (SELECT material_name FROM piece_logs WHERE worker_id = w.id ORDER BY id DESC LIMIT 1) as latest_material
+        (SELECT material_name FROM piece_logs WHERE worker_id = w.id ORDER BY id DESC LIMIT 1) as latest_material,
+        (SELECT last_login FROM users WHERE LOWER(username) = LOWER(w.unique_id) OR LOWER(full_name) = LOWER(w.name) LIMIT 1) as user_last_login,
+        (SELECT category_name FROM worker_work_assignments WHERE worker_id = w.id AND assigned_date = CURDATE() ORDER BY id DESC LIMIT 1) as today_assigned_cat,
+        (SELECT subcategory_name FROM worker_work_assignments WHERE worker_id = w.id AND assigned_date = CURDATE() ORDER BY id DESC LIMIT 1) as today_assigned_subcat,
+        (SELECT sub_subcategory_name FROM worker_work_assignments WHERE worker_id = w.id AND assigned_date = CURDATE() ORDER BY id DESC LIMIT 1) as today_assigned_subsub
     FROM workers w
     WHERE w.unit = :unit
     ORDER BY w.total_pieces DESC, w.name ASC
 ");
 $workersStmt->execute([':unit' => $requestedUnit]);
 $workersList = $workersStmt->fetchAll();
+
+// Fetch active garment categories for work assignment
+$catStmt = $pdo->query("
+    SELECT id, category_name, subcategory_name, sub_subcategory_name, status 
+    FROM garment_categories 
+    WHERE status = 'Active' 
+    ORDER BY category_name ASC, subcategory_name ASC, sub_subcategory_name ASC
+");
+$activeGarmentCategories = $catStmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Map unit codes for transfer detection
 $unitsLookup = [];
@@ -98,6 +111,7 @@ foreach ($productionUnits as $pu) {
 $unitsLookup['PU001'] = 'Unit 1';
 $unitsLookup['PU002'] = 'Unit 2';
 
+$activeWorkersCount = 0;
 foreach ($workersList as &$w) {
     $w['is_switched'] = false;
     $transFrom = !empty($w['transferred_from']) ? trim($w['transferred_from']) : '';
@@ -118,11 +132,214 @@ foreach ($workersList as &$w) {
             }
         }
     }
+
+    // Effective login detection (today's login)
+    $effLogin = !empty($w['last_login']) ? $w['last_login'] : (!empty($w['user_last_login']) ? $w['user_last_login'] : null);
+    $w['effective_login'] = $effLogin;
+    $w['is_logged_in_today'] = (!empty($effLogin) && date('Y-m-d', strtotime($effLogin)) === date('Y-m-d'));
+
+    if ($w['is_logged_in_today']) {
+        $activeWorkersCount++;
+    }
+
+    // Current assigned work
+    $assignedParts = array_filter([$w['today_assigned_cat'] ?? '', $w['today_assigned_subcat'] ?? '', $w['today_assigned_subsub'] ?? '']);
+    if (!empty($assignedParts)) {
+        $w['active_assignment'] = implode(' - ', $assignedParts);
+    } else {
+        $w['active_assignment'] = !empty($w['assigned_work']) ? $w['assigned_work'] : '';
+    }
 }
 unset($w);
 
 include __DIR__ . '/includes/header.php';
 ?>
+
+<style>
+/* ===================================================================
+   ACTIVE WORKER TICK, FILTER & ASSIGN WORK STYLES
+   =================================================================== */
+@keyframes tickPulse {
+    0% { transform: scale(1); filter: drop-shadow(0 0 4px rgba(16,185,129,0.7)); }
+    50% { transform: scale(1.18); filter: drop-shadow(0 0 10px rgba(16,185,129,0.95)); }
+    100% { transform: scale(1); filter: drop-shadow(0 0 4px rgba(16,185,129,0.7)); }
+}
+
+@keyframes pulseGlowEmerald {
+    0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+    70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+.worker-login-tick-badge {
+    color: #10b981;
+    font-size: 1.05rem;
+    margin-left: 0.35rem;
+    display: inline-flex;
+    align-items: center;
+    vertical-align: middle;
+    animation: tickPulse 2.4s infinite ease-in-out;
+    cursor: help;
+}
+
+.active-pulse-dot, .pulse-emerald-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #10b981;
+    display: inline-block;
+    animation: pulseGlowEmerald 1.8s infinite;
+}
+
+.active-status-filter-group {
+    display: inline-flex;
+    align-items: center;
+    background: rgba(15,23,42,0.8);
+    padding: 3px;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.08);
+    gap: 4px;
+}
+
+.unit-filter-pill {
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid transparent;
+    padding: 0.38rem 0.8rem;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+.unit-filter-pill:hover {
+    color: #fff;
+    background: rgba(255,255,255,0.05);
+}
+.unit-filter-pill.active {
+    background: rgba(6,182,212,0.18);
+    color: #06b6d4;
+    border-color: rgba(6,182,212,0.4);
+    box-shadow: 0 0 12px rgba(6,182,212,0.15);
+}
+.unit-filter-pill.filter-pill-active.active {
+    background: rgba(16,185,129,0.18);
+    color: #34d399;
+    border-color: rgba(16,185,129,0.45);
+    box-shadow: 0 0 14px rgba(16,185,129,0.2);
+}
+
+.btn-assign-work {
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
+    border: 1px solid rgba(16,185,129,0.7) !important;
+    color: #fff !important;
+    font-weight: 700 !important;
+    font-size: 0.76rem !important;
+    padding: 0.35rem 0.68rem !important;
+    border-radius: 6px !important;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    box-shadow: 0 0 14px rgba(16,185,129,0.3) !important;
+    transition: all 0.2s ease !important;
+}
+.btn-assign-work.is-hidden,
+.worker-login-tick-badge.is-hidden {
+    display: none !important;
+}
+.btn-assign-work:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 18px rgba(16,185,129,0.45) !important;
+}
+
+.btn-quick-active {
+    border: 1px solid rgba(255,255,255,0.1) !important;
+    background: rgba(0,0,0,0.25) !important;
+    color: var(--text-muted) !important;
+    padding: 0.35rem 0.58rem !important;
+    border-radius: 6px !important;
+    font-size: 0.74rem !important;
+    cursor: pointer !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 0.35rem !important;
+    transition: all 0.2s ease !important;
+}
+.btn-quick-active.is-active-btn {
+    border-color: rgba(16,185,129,0.4) !important;
+    color: #34d399 !important;
+    background: rgba(16,185,129,0.1) !important;
+}
+.btn-quick-active.is-active-btn:hover {
+    background: rgba(16,185,129,0.2) !important;
+    border-color: #10b981 !important;
+    color: #fff !important;
+}
+.btn-quick-active.is-inactive-btn:hover {
+    background: rgba(6,182,212,0.15) !important;
+    border-color: rgba(6,182,212,0.4) !important;
+    color: #06b6d4 !important;
+}
+
+/* Category cards inside Assign Work Modal */
+.assign-cat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 0.85rem;
+    max-height: 420px;
+    overflow-y: auto;
+    padding: 0.35rem;
+}
+.assign-cat-grid::-webkit-scrollbar {
+    width: 6px;
+}
+.assign-cat-grid::-webkit-scrollbar-thumb {
+    background: rgba(16,185,129,0.4);
+    border-radius: 6px;
+}
+.assign-cat-card {
+    background: rgba(15,23,42,0.85);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    padding: 0.9rem;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 0.65rem;
+    position: relative;
+    overflow: hidden;
+}
+.assign-cat-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #10b981, #06b6d4);
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+.assign-cat-card:hover {
+    border-color: rgba(16,185,129,0.45);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px -4px rgba(0,0,0,0.5), 0 0 15px rgba(16,185,129,0.15);
+    background: rgba(15,23,42,0.95);
+}
+.assign-cat-card:hover::before {
+    opacity: 1;
+}
+.assign-cat-card.is-currently-assigned {
+    border-color: #10b981 !important;
+    background: rgba(16,185,129,0.12) !important;
+    box-shadow: 0 0 18px rgba(16,185,129,0.25) !important;
+}
+.assign-cat-card.is-currently-assigned::before {
+    opacity: 1;
+}
+</style>
 
 <!-- Page Header -->
 <div class="page-header">
@@ -250,13 +467,30 @@ include __DIR__ . '/includes/header.php';
 
 <!-- Workers Directory Card -->
 <div class="card">
-    <div class="card-header" style="flex-wrap: wrap; gap: 0.75rem;">
-        <div class="card-title" style="flex: 1 1 auto;">
-            <i class="fa-solid fa-address-book"></i> Registered Workers Directory (<?= htmlspecialchars($requestedUnit) ?>)
+    <div class="card-header" style="flex-wrap: wrap; gap: 0.75rem; align-items: center; justify-content: space-between;">
+        <div class="card-title" style="flex: 1 1 auto; display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+            <span><i class="fa-solid fa-address-book text-cyan"></i> Registered Workers Directory (<?= htmlspecialchars($requestedUnit) ?>)</span>
+            <span class="badge-pill" id="headerWorkerCountBadge" style="font-size: 0.75rem; background: rgba(6,182,212,0.12); color: #06b6d4; border: 1px solid rgba(6,182,212,0.3);">
+                <?= count($workersList) ?> Total
+            </span>
         </div>
-        <div class="search-input-wrapper">
-            <i class="fa-solid fa-magnifying-glass"></i>
-            <input type="text" id="unitWorkerSearch" class="form-control" placeholder="Search name, ID, role, skills...">
+
+        <div style="display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap;">
+            <!-- Active Filter Segmented Toggle Buttons -->
+            <div class="active-status-filter-group">
+                <button type="button" class="unit-filter-pill active" id="btnFilterAllWorkers" onclick="filterByActiveStatus('all')">
+                    <i class="fa-solid fa-users"></i> All (<span id="allCountDisplay"><?= count($workersList) ?></span>)
+                </button>
+                <button type="button" class="unit-filter-pill filter-pill-active" id="btnFilterActiveWorkers" onclick="filterByActiveStatus('active')">
+                    <span class="active-pulse-dot"></span> Active Today (<span id="activeCountDisplay"><?= $activeWorkersCount ?></span>)
+                </button>
+            </div>
+
+            <!-- Search Input Wrapper -->
+            <div class="search-input-wrapper" style="min-width: 240px;">
+                <i class="fa-solid fa-magnifying-glass"></i>
+                <input type="text" id="unitWorkerSearch" class="form-control" placeholder="Search name, ID, role, skills...">
+            </div>
         </div>
     </div>
 
@@ -287,17 +521,48 @@ include __DIR__ . '/includes/header.php';
                     </tr>
                 <?php else: ?>
                     <?php foreach ($workersList as $idx => $w): ?>
-                        <tr class="unit-worker-row">
+                        <tr class="unit-worker-row" 
+                            id="workerRow_<?= $w['id'] ?>"
+                            data-is-active="<?= !empty($w['is_logged_in_today']) ? '1' : '0' ?>"
+                            data-worker-id="<?= $w['id'] ?>"
+                            data-worker-name="<?= htmlspecialchars($w['name']) ?>"
+                            data-worker-uid="<?= htmlspecialchars($w['unique_id']) ?>"
+                            data-worker-unit="<?= htmlspecialchars($w['unit']) ?>"
+                            data-worker-role="<?= htmlspecialchars($w['role']) ?>"
+                            data-assigned-work="<?= htmlspecialchars($w['active_assignment'] ?? '') ?>">
                             <td class="text-muted font-bold">#<?= $idx + 1 ?></td>
                             <td>
                                 <div class="worker-meta-cell">
                                     <div class="worker-avatar"><?= strtoupper(substr($w['name'], 0, 1)) ?></div>
                                     <div>
-                                        <a href="javascript:void(0)" onclick="openWorkerModal(<?= $w['id'] ?>)" class="worker-meta-name" style="text-decoration:none;">
-                                            <?= htmlspecialchars($w['name']) ?>
-                                        </a>
-                                        <div style="display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; margin-top: 0.15rem;">
+                                        <div style="display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;">
+                                            <a href="javascript:void(0)" onclick="openWorkerModal(<?= $w['id'] ?>)" class="worker-meta-name" style="text-decoration:none;">
+                                                <?= htmlspecialchars($w['name']) ?>
+                                            </a>
+                                            <!-- Automatic Tick Symbol generated ONLY for user logged in today -->
+                                            <span class="worker-tick-container" id="workerTickContainer_<?= $w['id'] ?>">
+                                                <?php if (!empty($w['is_logged_in_today'])): ?>
+                                                    <span class="worker-login-tick-badge" id="workerTick_<?= $w['id'] ?>" title="Active Today • Logged in at <?= !empty($w['effective_login']) ? date('h:i A', strtotime($w['effective_login'])) : 'Today' ?>">
+                                                        <i class="fa-solid fa-circle-check"></i>
+                                                    </span>
+                                                <?php endif; ?>
+                                            </span>
+                                        </div>
+
+                                        <div style="display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; margin-top: 0.2rem;">
                                             <span class="worker-meta-sub text-cyan font-bold"><?= htmlspecialchars($w['unique_id']) ?></span>
+                                            
+                                            <!-- Active / Inactive Status Indicator -->
+                                            <?php if (!empty($w['is_logged_in_today'])): ?>
+                                                <span class="badge-pill unit-emerald-pill worker-active-pill" id="activePill_<?= $w['id'] ?>" style="font-size: 0.65rem; padding: 0.08rem 0.42rem;">
+                                                    <span class="pulse-emerald-dot"></span> Active
+                                                </span>
+                                            <?php else: ?>
+                                                <span class="badge-pill worker-active-pill" id="activePill_<?= $w['id'] ?>" style="font-size: 0.65rem; padding: 0.08rem 0.42rem; background: rgba(148,163,184,0.12); color: #94a3b8; border: 1px solid rgba(148,163,184,0.25);">
+                                                    Inactive
+                                                </span>
+                                            <?php endif; ?>
+
                                             <?php if (!empty($w['is_switched']) && !empty($w['transferred_from'])): ?>
                                                 <span class="badge-pill" style="font-size: 0.65rem; padding: 0.08rem 0.38rem; background: rgba(245, 158, 11, 0.14); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 9999px; display: inline-flex; align-items: center; gap: 0.2rem;" title="Switched from <?= htmlspecialchars($w['transferred_from']) ?> (<?= htmlspecialchars($w['transfer_type'] ?? 'Emergency Support') ?>)">
                                                     <i class="fa-solid fa-arrow-right-arrow-left" style="font-size: 0.55rem;"></i> Switched from <?= htmlspecialchars($w['transferred_from']) ?>
@@ -309,8 +574,17 @@ include __DIR__ . '/includes/header.php';
                             </td>
                             <td>
                                 <strong><?= htmlspecialchars($w['role']) ?></strong>
-                                <?php if ($w['latest_material']): ?>
-                                    <div class="text-muted" style="font-size: 0.75rem;">Latest: <?= htmlspecialchars($w['latest_material']) ?></div>
+                                <?php if (!empty($w['active_assignment'])): ?>
+                                    <div class="worker-assigned-box-tag" id="assignedTag_<?= $w['id'] ?>" style="margin-top: 0.25rem;">
+                                        <span class="badge-pill" style="background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.35); font-size: 0.72rem; display: inline-flex; align-items: center; gap: 0.3rem;" title="Assigned Work Category">
+                                            <i class="fa-solid fa-clipboard-check"></i> Work: <strong style="color: #fff;"><?= htmlspecialchars($w['active_assignment']) ?></strong>
+                                        </span>
+                                    </div>
+                                <?php else: ?>
+                                    <div class="worker-assigned-box-tag" id="assignedTag_<?= $w['id'] ?>" style="margin-top: 0.25rem; display: none;"></div>
+                                    <?php if ($w['latest_material']): ?>
+                                        <div class="text-muted" style="font-size: 0.75rem;">Latest: <?= htmlspecialchars($w['latest_material']) ?></div>
+                                    <?php endif; ?>
                                 <?php endif; ?>
                             </td>
                             <td>
@@ -335,8 +609,31 @@ include __DIR__ . '/includes/header.php';
                                 <span class="text-muted" style="font-size: 0.75rem;"> pcs</span>
                             </td>
                             <td>
-                                <div style="display: flex; gap: 0.45rem;">
-                                    <button class="btn btn-outline btn-sm" onclick="openWorkerModal(<?= $w['id'] ?>)" title="View Full Profile">
+                                <div style="display: flex; gap: 0.45rem; align-items: center; flex-wrap: wrap;">
+                                    <!-- Assign Work Button: ONLY for users who logged in today! -->
+                                    <span class="assign-work-container" id="assignWorkContainer_<?= $w['id'] ?>">
+                                        <?php if (!empty($w['is_logged_in_today'])): ?>
+                                            <button type="button" 
+                                                    class="btn btn-sm btn-assign-work" 
+                                                    id="assignWorkBtn_<?= $w['id'] ?>"
+                                                    onclick="openAssignWorkModal(<?= $w['id'] ?>, '<?= htmlspecialchars(addslashes($w['name'])) ?>', '<?= htmlspecialchars(addslashes($w['unique_id'])) ?>', '<?= htmlspecialchars(addslashes($w['unit'])) ?>', '<?= htmlspecialchars(addslashes($w['role'])) ?>', '<?= htmlspecialchars(addslashes($w['active_assignment'] ?? '')) ?>')"
+                                                    title="Assign Garment Production Categories">
+                                                <i class="fa-solid fa-clipboard-list"></i> Assign Work
+                                            </button>
+                                        <?php endif; ?>
+                                    </span>
+
+                                    <!-- Quick Active Toggle Button (Activate / Deactivate) -->
+                                    <button type="button" 
+                                            class="btn btn-outline btn-sm btn-quick-active <?= !empty($w['is_logged_in_today']) ? 'is-active-btn' : 'is-inactive-btn' ?>"
+                                            id="toggleActiveBtn_<?= $w['id'] ?>"
+                                            onclick="quickToggleWorkerActive(<?= $w['id'] ?>)"
+                                            title="<?= !empty($w['is_logged_in_today']) ? 'Active Today • Click to mark Inactive' : 'Click to Activate for Today & generate tick' ?>">
+                                        <i class="fa-solid <?= !empty($w['is_logged_in_today']) ? 'fa-circle-check text-emerald' : 'fa-power-off text-muted' ?>"></i>
+                                        <span class="btn-active-label"><?= !empty($w['is_logged_in_today']) ? 'Active' : 'Activate' ?></span>
+                                    </button>
+
+                                    <button type="button" class="btn btn-outline btn-sm" onclick="openWorkerModal(<?= $w['id'] ?>)" title="View Full Profile">
                                         <i class="fa-solid fa-eye"></i> Details
                                     </button>
                                     <a href="daily_output.php?worker_id=<?= $w['id'] ?>&unit=<?= urlencode($requestedUnit) ?>" class="btn btn-primary btn-sm" title="Open Stitched Clothes Workstation">
@@ -349,6 +646,139 @@ include __DIR__ . '/includes/header.php';
                 <?php endif; ?>
             </tbody>
         </table>
+    </div>
+</div>
+
+<!-- Modal: Assign Work Box & Categories for Logged-In Worker -->
+<div id="assignWorkModal" class="modal-overlay" style="display: none;" aria-hidden="true">
+    <div class="modal-card" style="max-width: 820px; width: 95%; max-height: 90vh; display: flex; flex-direction: column;">
+        <div class="modal-header" style="border-bottom: 1px solid rgba(255,255,255,0.08); padding: 1.15rem 1.4rem;">
+            <div class="modal-title-group" style="display: flex; align-items: center; gap: 0.75rem;">
+                <div style="width: 44px; height: 44px; border-radius: 12px; background: rgba(16,185,129,0.15); border: 1px solid rgba(16,185,129,0.35); display: flex; align-items: center; justify-content: center; color: #10b981; font-size: 1.25rem; box-shadow: 0 0 18px rgba(16,185,129,0.25);">
+                    <i class="fa-solid fa-clipboard-check"></i>
+                </div>
+                <div>
+                    <h3 style="margin: 0; font-size: 1.15rem; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 0.5rem;">
+                        Assign Work to Worker
+                        <span class="badge-pill unit-emerald-pill" style="font-size: 0.7rem;">Active Today</span>
+                    </h3>
+                    <p class="text-muted" style="margin: 0.15rem 0 0 0; font-size: 0.78rem;">
+                        Select garment category, subcategory and garment type to assign work to this operator.
+                    </p>
+                </div>
+            </div>
+            <button type="button" class="modal-close-btn" onclick="closeAssignWorkModal()">&times;</button>
+        </div>
+
+        <div class="modal-body" style="padding: 1.25rem 1.4rem; overflow-y: auto; flex: 1 1 auto;">
+            <!-- Target Worker Banner -->
+            <div style="background: rgba(15,23,42,0.9); border: 1px solid rgba(16,185,129,0.3); border-radius: 10px; padding: 0.95rem 1.15rem; margin-bottom: 1.15rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem;">
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <div id="assignModalAvatar" style="width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, #06b6d4, #3b82f6); color: #fff; font-weight: 800; display: flex; align-items: center; justify-content: center; font-size: 1.1rem;">
+                        W
+                    </div>
+                    <div>
+                        <div style="display: flex; align-items: center; gap: 0.45rem;">
+                            <strong id="assignModalWorkerName" style="color: #fff; font-size: 0.98rem;">Worker Name</strong>
+                            <span class="worker-login-tick-badge" title="Logged in today"><i class="fa-solid fa-circle-check"></i></span>
+                            <span id="assignModalWorkerId" class="text-cyan font-bold" style="font-size: 0.8rem;">PU001-1</span>
+                        </div>
+                        <div style="font-size: 0.75rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.5rem; margin-top: 0.1rem;">
+                            <span id="assignModalWorkerUnit"><i class="fa-solid fa-industry"></i> Unit 1</span>
+                            <span>•</span>
+                            <span id="assignModalWorkerRole">Operator</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div style="text-align: right;">
+                    <div style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 0.15rem;">Current Work Assignment:</div>
+                    <div id="assignModalCurrentWorkBadge" class="badge-pill" style="background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.35); font-weight: 700; font-size: 0.8rem;">
+                        <i class="fa-solid fa-clipboard-check"></i> <span id="assignModalCurrentWorkText">None</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Categories Filter & Search Box -->
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem;">
+                <h4 style="font-size: 0.92rem; font-weight: 700; color: #fff; margin: 0; display: flex; align-items: center; gap: 0.45rem;">
+                    <i class="fa-solid fa-layer-group text-cyan"></i> Select Production Category
+                    <span class="badge-pill" style="font-size: 0.7rem;"><?= count($activeGarmentCategories) ?> Categories Available</span>
+                </h4>
+                <div class="search-input-wrapper" style="min-width: 220px; max-width: 280px;">
+                    <i class="fa-solid fa-magnifying-glass"></i>
+                    <input type="text" id="assignCatSearchInput" class="form-control" placeholder="Search categories..." style="height: 34px; font-size: 0.78rem;">
+                </div>
+            </div>
+
+            <!-- Category Selection Grid -->
+            <div class="assign-cat-grid" id="assignCatCardsContainer">
+                <?php if (empty($activeGarmentCategories)): ?>
+                    <div style="grid-column: 1 / -1; text-align: center; padding: 2rem; color: var(--text-muted);">
+                        <i class="fa-solid fa-boxes-stacked fa-2x" style="opacity: 0.3; margin-bottom: 0.5rem;"></i>
+                        <p>No active categories configured. Add categories in <a href="categories.php" class="text-cyan">Garment Categories</a>.</p>
+                    </div>
+                <?php else: ?>
+                    <?php foreach ($activeGarmentCategories as $cat): 
+                        $fullTitle = htmlspecialchars($cat['category_name']);
+                        $sub = htmlspecialchars($cat['subcategory_name']);
+                        $subsub = htmlspecialchars($cat['sub_subcategory_name'] ?? '');
+                        $comboKey = $cat['category_name'] . ($sub ? ' - ' . $sub : '') . ($subsub ? ' - ' . $subsub : '');
+                    ?>
+                        <div class="assign-cat-card" 
+                             data-cat-id="<?= (int)$cat['id'] ?>"
+                             data-cat-name="<?= htmlspecialchars($cat['category_name']) ?>"
+                             data-subcat-name="<?= htmlspecialchars($cat['subcategory_name']) ?>"
+                             data-subsub-name="<?= htmlspecialchars($cat['sub_subcategory_name'] ?? '') ?>"
+                             data-search="<?= strtolower(htmlspecialchars($comboKey)) ?>">
+                            <div>
+                                <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.35rem;">
+                                    <div style="display: flex; align-items: center; gap: 0.45rem;">
+                                        <div style="width: 28px; height: 28px; border-radius: 7px; background: rgba(6,182,212,0.14); color: #06b6d4; display: flex; align-items: center; justify-content: center; font-size: 0.85rem;">
+                                            <i class="fa-solid fa-shirt"></i>
+                                        </div>
+                                        <strong style="color: #fff; font-size: 0.9rem;"><?= $fullTitle ?></strong>
+                                    </div>
+                                    <span class="badge-pill unit-emerald-pill" style="font-size: 0.65rem; padding: 0.08rem 0.35rem;">Active</span>
+                                </div>
+                                <div style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.2rem;">
+                                    <i class="fa-solid fa-tag text-cyan" style="font-size: 0.68rem;"></i> <?= $sub ?>
+                                </div>
+                                <?php if (!empty($subsub)): ?>
+                                    <div style="font-size: 0.72rem; color: var(--text-secondary); background: rgba(0,0,0,0.25); padding: 0.15rem 0.4rem; border-radius: 4px; display: inline-block;">
+                                        Type: <?= $subsub ?>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+
+                            <button type="button" 
+                                    class="btn btn-outline btn-sm btn-select-cat" 
+                                    onclick="executeAssignCategory(<?= (int)$cat['id'] ?>, '<?= htmlspecialchars(addslashes($cat['category_name'])) ?>', '<?= htmlspecialchars(addslashes($cat['subcategory_name'])) ?>', '<?= htmlspecialchars(addslashes($cat['sub_subcategory_name'] ?? '')) ?>')"
+                                    style="width: 100%; font-size: 0.75rem; padding: 0.32rem 0.5rem; justify-content: center;">
+                                <i class="fa-solid fa-check"></i> Assign Category
+                            </button>
+                        </div>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </div>
+
+            <!-- Optional Custom Target / Notes Field -->
+            <div style="margin-top: 1.15rem; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 0.85rem;">
+                <label style="font-size: 0.78rem; font-weight: 600; color: #fff; margin-bottom: 0.35rem; display: flex; align-items: center; gap: 0.35rem;">
+                    <i class="fa-solid fa-pen text-cyan"></i> Optional Production Instructions / Batch Notes
+                </label>
+                <input type="text" id="assignModalNotesInput" class="form-control" placeholder="e.g. Target: 50 pieces today, check stitching alignment..." style="font-size: 0.8rem; height: 36px;">
+            </div>
+        </div>
+
+        <div class="modal-footer" style="border-top: 1px solid rgba(255,255,255,0.08); padding: 0.85rem 1.4rem; display: flex; justify-content: space-between; align-items: center;">
+            <span class="text-muted" style="font-size: 0.75rem;">
+                <i class="fa-solid fa-circle-info text-cyan"></i> Assignment updates worker profile &amp; workstation.
+            </span>
+            <button type="button" class="btn btn-outline btn-sm" onclick="closeAssignWorkModal()">
+                Close
+            </button>
+        </div>
     </div>
 </div>
 
@@ -734,6 +1164,318 @@ async function deleteProductionUnit(unitId, unitTitle) {
     } catch (err) {
         console.error(err);
         alert('Server error while deleting unit.');
+    }
+}
+
+// ===================================================================
+// ACTIVE WORKERS FILTER & ASSIGN WORK LOGIC
+// ===================================================================
+let currentActiveFilter = 'all';
+let currentAssignWorkerId = null;
+
+function filterByActiveStatus(mode) {
+    currentActiveFilter = mode;
+    const btnAll = document.getElementById('btnFilterAllWorkers');
+    const btnActive = document.getElementById('btnFilterActiveWorkers');
+
+    if (btnAll && btnActive) {
+        if (mode === 'active') {
+            btnAll.classList.remove('active');
+            btnActive.classList.add('active');
+        } else {
+            btnActive.classList.remove('active');
+            btnAll.classList.add('active');
+        }
+    }
+
+    applyWorkersTableFilters();
+}
+
+function applyWorkersTableFilters() {
+    const searchInput = document.getElementById('unitWorkerSearch');
+    const query = searchInput ? searchInput.value.toLowerCase().trim() : '';
+    const rows = document.querySelectorAll('.unit-worker-row');
+    let visibleCount = 0;
+
+    rows.forEach(row => {
+        const isActive = row.getAttribute('data-is-active') === '1';
+        const text = row.innerText.toLowerCase();
+        const matchesSearch = !query || text.includes(query);
+        const matchesActive = (currentActiveFilter === 'all') || (currentActiveFilter === 'active' && isActive);
+
+        if (matchesSearch && matchesActive) {
+            row.style.display = '';
+            visibleCount++;
+        } else {
+            row.style.display = 'none';
+        }
+    });
+
+    const tbody = document.getElementById('unitWorkersTableBody');
+    let emptyRow = document.getElementById('filterEmptyStateRow');
+
+    if (visibleCount === 0 && rows.length > 0) {
+        if (!emptyRow && tbody) {
+            emptyRow = document.createElement('tr');
+            emptyRow.id = 'filterEmptyStateRow';
+            emptyRow.innerHTML = `
+                <td colspan="8" class="text-center" style="padding: 2.5rem 1rem; color: var(--text-muted);">
+                    <i class="fa-solid fa-user-clock fa-2x" style="opacity: 0.35; margin-bottom: 0.5rem; display: block;"></i>
+                    <strong style="color: #fff;">No Active Workers Found Today in This Unit</strong>
+                    <p style="font-size: 0.8rem; margin: 0.35rem 0 0 0;">Workers must sign in today or click 'Activate' to appear here.</p>
+                </td>
+            `;
+            tbody.appendChild(emptyRow);
+        }
+    } else if (emptyRow) {
+        emptyRow.remove();
+    }
+}
+
+// Update table search listener to respect active filter
+document.addEventListener('DOMContentLoaded', () => {
+    const searchInput = document.getElementById('unitWorkerSearch');
+    if (searchInput) {
+        searchInput.addEventListener('input', applyWorkersTableFilters);
+    }
+
+    // Modal category search filter
+    const catSearch = document.getElementById('assignCatSearchInput');
+    if (catSearch) {
+        catSearch.addEventListener('input', () => {
+            const q = catSearch.value.toLowerCase().trim();
+            const cards = document.querySelectorAll('.assign-cat-card');
+            cards.forEach(card => {
+                const s = card.getAttribute('data-search') || '';
+                card.style.display = (!q || s.includes(q)) ? '' : 'none';
+            });
+        });
+    }
+
+    // Close assign modal on outside click
+    window.addEventListener('click', (e) => {
+        const assignModal = document.getElementById('assignWorkModal');
+        if (e.target === assignModal) closeAssignWorkModal();
+    });
+});
+
+async function quickToggleWorkerActive(workerId) {
+    const row = document.getElementById('workerRow_' + workerId);
+    if (!row) return;
+
+    const isCurrentlyActive = (row.getAttribute('data-is-active') === '1');
+    const newStatus = !isCurrentlyActive;
+
+    try {
+        const res = await fetch('api.php?action=toggle_worker_active', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ worker_id: workerId, status: newStatus ? 'active' : 'inactive' })
+        });
+        const data = await res.json();
+
+        if (data.success) {
+            row.setAttribute('data-is-active', data.is_active ? '1' : '0');
+
+            // 1. Tick Symbol next to worker name (ONLY for active/logged-in worker)
+            const tickContainer = document.getElementById('workerTickContainer_' + workerId);
+            if (tickContainer) {
+                if (data.is_active) {
+                    tickContainer.innerHTML = `
+                        <span class="worker-login-tick-badge" id="workerTick_${workerId}" title="Active Today • Logged In at ${data.formatted_time || 'Today'}">
+                            <i class="fa-solid fa-circle-check"></i>
+                        </span>
+                    `;
+                } else {
+                    tickContainer.innerHTML = '';
+                }
+            }
+
+            // 2. Active status pill next to ID
+            const activePill = document.getElementById('activePill_' + workerId);
+            if (activePill) {
+                if (data.is_active) {
+                    activePill.className = 'badge-pill unit-emerald-pill worker-active-pill';
+                    activePill.innerHTML = '<span class="pulse-emerald-dot"></span> Active';
+                } else {
+                    activePill.className = 'badge-pill worker-active-pill';
+                    activePill.style.background = 'rgba(148,163,184,0.12)';
+                    activePill.style.color = '#94a3b8';
+                    activePill.style.border = '1px solid rgba(148,163,184,0.25)';
+                    activePill.innerHTML = 'Inactive';
+                }
+            }
+
+            // 3. Assign Work button: ONLY visible for logged-in / active user!
+            const assignContainer = document.getElementById('assignWorkContainer_' + workerId);
+            if (assignContainer) {
+                if (data.is_active) {
+                    const wName = (row.getAttribute('data-worker-name') || '').replace(/'/g, "\\'");
+                    const wUid = (row.getAttribute('data-worker-uid') || '').replace(/'/g, "\\'");
+                    const wUnit = (row.getAttribute('data-worker-unit') || '').replace(/'/g, "\\'");
+                    const wRole = (row.getAttribute('data-worker-role') || '').replace(/'/g, "\\'");
+                    const wAssigned = (row.getAttribute('data-assigned-work') || '').replace(/'/g, "\\'");
+                    assignContainer.innerHTML = `
+                        <button type="button" 
+                                class="btn btn-sm btn-assign-work" 
+                                id="assignWorkBtn_${workerId}"
+                                onclick="openAssignWorkModal(${workerId}, '${wName}', '${wUid}', '${wUnit}', '${wRole}', '${wAssigned}')"
+                                title="Assign Garment Production Categories">
+                            <i class="fa-solid fa-clipboard-list"></i> Assign Work
+                        </button>
+                    `;
+                } else {
+                    assignContainer.innerHTML = '';
+                }
+            }
+
+            // 4. Quick Active button in actions
+            const toggleBtn = document.getElementById('toggleActiveBtn_' + workerId);
+            if (toggleBtn) {
+                if (data.is_active) {
+                    toggleBtn.className = 'btn btn-outline btn-sm btn-quick-active is-active-btn';
+                    toggleBtn.title = 'Active Today • Click to mark Inactive';
+                    toggleBtn.innerHTML = '<i class="fa-solid fa-circle-check text-emerald"></i> <span class="btn-active-label">Active</span>';
+                } else {
+                    toggleBtn.className = 'btn btn-outline btn-sm btn-quick-active is-inactive-btn';
+                    toggleBtn.title = 'Click to Activate for Today & generate tick';
+                    toggleBtn.innerHTML = '<i class="fa-solid fa-power-off text-muted"></i> <span class="btn-active-label">Activate</span>';
+                }
+            }
+
+            // 5. Update header Active Today counter badge
+            const activeCountEl = document.getElementById('activeCountDisplay');
+            if (activeCountEl) {
+                const totalActive = document.querySelectorAll('.unit-worker-row[data-is-active="1"]').length;
+                activeCountEl.innerText = totalActive;
+            }
+
+            if (typeof showToast === 'function') {
+                showToast(data.message, data.is_active ? 'success' : 'info');
+            }
+
+            // Re-apply filter if on active tab
+            if (currentActiveFilter === 'active') {
+                applyWorkersTableFilters();
+            }
+        } else {
+            alert(data.message || 'Failed to update active status.');
+        }
+    } catch (err) {
+        console.error(err);
+        alert('Server error while toggling active status.');
+    }
+}
+
+function openAssignWorkModal(workerId, name, uid, unit, role, assignedWork) {
+    currentAssignWorkerId = workerId;
+    const modal = document.getElementById('assignWorkModal');
+    if (!modal) return;
+
+    // Fill worker info
+    const row = document.getElementById('workerRow_' + workerId);
+    const workerName = name || (row ? row.getAttribute('data-worker-name') : 'Worker');
+    const workerUid = uid || (row ? row.getAttribute('data-worker-uid') : 'PU001');
+    const workerUnit = unit || (row ? row.getAttribute('data-worker-unit') : 'Unit 1');
+    const workerRole = role || (row ? row.getAttribute('data-worker-role') : 'Operator');
+    const currentWork = assignedWork || (row ? row.getAttribute('data-assigned-work') : '');
+
+    const nameEl = document.getElementById('assignModalWorkerName');
+    const uidEl = document.getElementById('assignModalWorkerId');
+    const unitEl = document.getElementById('assignModalWorkerUnit');
+    const roleEl = document.getElementById('assignModalWorkerRole');
+    const avatarEl = document.getElementById('assignModalAvatar');
+    const currentWorkEl = document.getElementById('assignModalCurrentWorkText');
+
+    if (nameEl) nameEl.innerText = workerName;
+    if (uidEl) uidEl.innerText = workerUid;
+    if (unitEl) unitEl.innerHTML = `<i class="fa-solid fa-industry"></i> ${workerUnit}`;
+    if (roleEl) roleEl.innerText = workerRole;
+    if (avatarEl) avatarEl.innerText = (workerName.charAt(0) || 'W').toUpperCase();
+    if (currentWorkEl) {
+        currentWorkEl.innerText = currentWork ? currentWork : 'None (Ready for Assignment)';
+    }
+
+    // Highlight card if matches current work
+    const cards = document.querySelectorAll('.assign-cat-card');
+    cards.forEach(card => {
+        const catName = card.getAttribute('data-cat-name') || '';
+        const isMatch = currentWork && currentWork.toLowerCase().includes(catName.toLowerCase());
+        if (isMatch) {
+            card.classList.add('is-currently-assigned');
+        } else {
+            card.classList.remove('is-currently-assigned');
+        }
+    });
+
+    const searchInput = document.getElementById('assignCatSearchInput');
+    if (searchInput) searchInput.value = '';
+    cards.forEach(c => c.style.display = '');
+
+    modal.style.display = 'flex';
+}
+
+function closeAssignWorkModal() {
+    const modal = document.getElementById('assignWorkModal');
+    if (modal) modal.style.display = 'none';
+    currentAssignWorkerId = null;
+}
+
+async function executeAssignCategory(catId, catName, subcatName, subsubName) {
+    if (!currentAssignWorkerId) {
+        alert('No worker selected for assignment.');
+        return;
+    }
+
+    const notesInput = document.getElementById('assignModalNotesInput');
+    const notes = notesInput ? notesInput.value.trim() : '';
+
+    try {
+        const res = await fetch('api.php?action=assign_worker_category', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                worker_id: currentAssignWorkerId,
+                category_id: catId,
+                category_name: catName,
+                subcategory_name: subcatName,
+                sub_subcategory_name: subsubName,
+                notes: notes
+            })
+        });
+        const data = await res.json();
+
+        if (data.success) {
+            // Update row attributes and tag in table
+            const row = document.getElementById('workerRow_' + currentAssignWorkerId);
+            if (row) {
+                row.setAttribute('data-assigned-work', data.assigned_work);
+            }
+
+            const assignedTag = document.getElementById('assignedTag_' + currentAssignWorkerId);
+            if (assignedTag) {
+                assignedTag.style.display = 'block';
+                assignedTag.innerHTML = `
+                    <span class="badge-pill" style="background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.35); font-size: 0.72rem; display: inline-flex; align-items: center; gap: 0.3rem;" title="Assigned Work Category">
+                        <i class="fa-solid fa-clipboard-check"></i> Work: <strong style="color: #fff;">${data.assigned_work}</strong>
+                    </span>
+                `;
+            }
+
+            const curText = document.getElementById('assignModalCurrentWorkText');
+            if (curText) curText.innerText = data.assigned_work;
+
+            if (typeof showToast === 'function') {
+                showToast(data.message, 'success');
+            }
+
+            setTimeout(closeAssignWorkModal, 400);
+        } else {
+            alert(data.message || 'Failed to assign work category.');
+        }
+    } catch (err) {
+        console.error(err);
+        alert('Server error while assigning work category.');
     }
 }
 </script>

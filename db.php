@@ -134,6 +134,19 @@ class Database {
             self::$pdo->exec("ALTER TABLE workers ADD COLUMN transfer_type VARCHAR(50) NULL AFTER transferred_from");
         } catch (Exception $e) {}
 
+        try {
+            self::$pdo->exec("ALTER TABLE workers ADD COLUMN last_login TIMESTAMP NULL DEFAULT NULL AFTER status");
+        } catch (Exception $e) {}
+        try {
+            self::$pdo->exec("ALTER TABLE workers ADD COLUMN assigned_work VARCHAR(255) NULL DEFAULT NULL AFTER last_login");
+        } catch (Exception $e) {}
+        try {
+            self::$pdo->exec("ALTER TABLE workers ADD COLUMN assigned_category_id INT NULL DEFAULT NULL AFTER assigned_work");
+        } catch (Exception $e) {}
+        try {
+            self::$pdo->exec("ALTER TABLE workers ADD COLUMN assigned_at TIMESTAMP NULL DEFAULT NULL AFTER assigned_category_id");
+        } catch (Exception $e) {}
+
         // Table: piece_logs
         $sqlLogs = "
         CREATE TABLE IF NOT EXISTS piece_logs (
@@ -179,6 +192,32 @@ class Database {
 
         try {
             self::$pdo->exec("ALTER TABLE users ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'Active' AFTER unit");
+        } catch (Exception $e) {}
+        try {
+            self::$pdo->exec("ALTER TABLE users ADD COLUMN last_login TIMESTAMP NULL DEFAULT NULL AFTER status");
+        } catch (Exception $e) {}
+
+        // Table: worker_work_assignments
+        $sqlAssignments = "
+        CREATE TABLE IF NOT EXISTS worker_work_assignments (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            worker_id INT NOT NULL,
+            category_id INT NULL,
+            category_name VARCHAR(150) NOT NULL,
+            subcategory_name VARCHAR(150) DEFAULT '',
+            sub_subcategory_name VARCHAR(150) DEFAULT '',
+            assigned_date DATE NOT NULL,
+            assigned_by VARCHAR(100) DEFAULT 'admin',
+            status VARCHAR(50) DEFAULT 'Active',
+            notes TEXT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_worker (worker_id),
+            INDEX idx_date (assigned_date),
+            FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ";
+        try {
+            self::$pdo->exec($sqlAssignments);
         } catch (Exception $e) {}
 
         // Table: garment_categories (Admin-managed Category, Subcategory, Sub-Subcategory)
