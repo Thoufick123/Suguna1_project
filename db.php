@@ -254,7 +254,6 @@ class Database {
             if ($catCount === 0) {
                 $seedCats = [
                     ['Nighty', 'Regular Cotton', 'Daily Wear'],
-                    ['Feeding Nighty', 'Front Zip', 'Comfort Stretch'],
                     ['Kurti', 'Cotton Kurti', 'A-Line / Printed'],
                     ['Pajama', 'Casual Pajama', 'Elastic Waist'],
                     ['T-Shirt', 'Round Neck', 'Cotton Blend'],
@@ -265,6 +264,18 @@ class Database {
                     $insCat->execute($sc);
                 }
             }
+        } catch (Exception $e) {}
+
+        // Auto-cleanup dummy 'Feeding Nighty' and ensure user's 'feeding' -> 'nighty' is active
+        try {
+            $checkFeeding = (int)self::$pdo->query("SELECT COUNT(*) FROM garment_categories WHERE LOWER(category_name) = 'feeding' AND LOWER(subcategory_name) = 'nighty'")->fetchColumn();
+            if ($checkFeeding === 0) {
+                self::$pdo->exec("INSERT INTO garment_categories (category_name, subcategory_name, sub_subcategory_name, status, created_by) VALUES ('feeding', 'nighty', '', 'Active', 'admin')");
+            }
+
+            self::$pdo->exec("DELETE FROM garment_categories WHERE category_name = 'Feeding Nighty'");
+            self::$pdo->exec("UPDATE worker_work_assignments SET category_name = 'feeding', subcategory_name = 'nighty', sub_subcategory_name = '' WHERE category_name = 'Feeding Nighty'");
+            self::$pdo->exec("UPDATE workers SET assigned_work = REPLACE(assigned_work, 'Feeding Nighty', 'feeding') WHERE assigned_work LIKE '%Feeding Nighty%'");
         } catch (Exception $e) {}
 
         // Table: worker_roles (Admin-managed Worker Designations / Roles - starts empty until admin adds)

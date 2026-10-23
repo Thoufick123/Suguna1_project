@@ -78,12 +78,35 @@ if ($selectedWorkerId > 0) {
 }
 
 // =========================================================================
-// CSV EXPORT ENGINE FOR OPERATOR / WORKER COMPLETE HISTORY
+// CSV EXPORT ENGINE FOR OPERATOR / WORKER COMPLETE OR DATE-RANGE HISTORY
 // =========================================================================
 if (isset($_GET['export']) && $_GET['export'] === 'csv' && $worker) {
+    $startDate = trim($_GET['start_date'] ?? '');
+    $endDate   = trim($_GET['end_date'] ?? '');
+
+    $dateConditions = "";
+    $params = [':wid' => $worker['id']];
+    $periodLabel = "All Time (Whole History)";
+
+    if (!empty($startDate) && !empty($endDate)) {
+        $dateConditions = " AND pl.work_date >= :start_date AND pl.work_date <= :end_date ";
+        $params[':start_date'] = $startDate;
+        $params[':end_date']   = $endDate;
+        $periodLabel = "From {$startDate} to {$endDate}";
+    } elseif (!empty($startDate)) {
+        $dateConditions = " AND pl.work_date >= :start_date ";
+        $params[':start_date'] = $startDate;
+        $periodLabel = "From {$startDate} onwards";
+    } elseif (!empty($endDate)) {
+        $dateConditions = " AND pl.work_date <= :end_date ";
+        $params[':end_date'] = $endDate;
+        $periodLabel = "Up to {$endDate}";
+    }
+
     $safeName = preg_replace('/[^a-zA-Z0-9_-]/', '_', strtolower($worker['name']));
     $safeUid  = preg_replace('/[^a-zA-Z0-9_-]/', '_', strtolower($worker['unique_id']));
-    $filename = "fabriqpro_history_{$safeUid}_{$safeName}_" . date('Ymd_His') . ".csv";
+    $rangeSlug = (!empty($startDate) && !empty($endDate)) ? "{$startDate}_to_{$endDate}" : ((!empty($startDate)) ? "from_{$startDate}" : "all_time");
+    $filename = "fabriqpro_history_{$safeUid}_{$safeName}_{$rangeSlug}_" . date('His') . ".csv";
 
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="' . $filename . '"');
@@ -115,10 +138,10 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv' && $worker) {
                pl.material_name, pl.piece_count, pl.created_at, pl.notes
         FROM piece_logs pl
         JOIN workers w ON w.id = pl.worker_id
-        WHERE pl.worker_id = :wid
+        WHERE pl.worker_id = :wid {$dateConditions}
         ORDER BY pl.work_date DESC, pl.id DESC
     ");
-    $csvStmt->execute([':wid' => $worker['id']]);
+    $csvStmt->execute($params);
 
     $totalExportPieces = 0;
     $totalExportRows   = 0;
@@ -145,16 +168,16 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv' && $worker) {
     fputcsv($out, []);
     fputcsv($out, [
         'TOTAL SUMMARY',
-        "Records: $totalExportRows",
+        "Records: {$totalExportRows}",
         '',
         $worker['unique_id'],
         $worker['name'],
         $worker['unit'],
         $worker['role'],
-        'LIFETIME PIECES:',
+        'TOTAL PIECES:',
         $totalExportPieces,
         date('Y-m-d H:i:s'),
-        'Full Worker History'
+        "Period: {$periodLabel}"
     ]);
 
     fclose($out);
@@ -417,7 +440,12 @@ while ($catRow = $catStmt->fetch(PDO::FETCH_ASSOC)) {
             $adminSubcategoryChips[$sKey] = $subChipItem;
 
             if ($hasAssignedWork) {
-                if (isset($assignedCategoryNames[strtolower($c)])) {
+                // If specific subcategories were assigned, prioritize exact subcategory matching!
+                if (!empty($assignedSubcategoryNames)) {
+                    if (isset($assignedSubcategoryNames[$sKey])) {
+                        $workerAssignedSubcategories[$sKey] = $subChipItem;
+                    }
+                } elseif (isset($assignedCategoryNames[strtolower($c)])) {
                     $workerAssignedSubcategories[$sKey] = $subChipItem;
                 }
             }
@@ -450,6 +478,7 @@ window.currentSelectedDate = <?= json_encode($selectedDate) ?>;
 window.isCurrentDateToday = <?= json_encode($selectedDate === date('Y-m-d')) ?>;
 window.lastLoggedMaterial = <?= json_encode(!empty($todayLogs) ? $todayLogs[0]['material_name'] : null) ?>;
 window.isUserRole = <?= json_encode($isUserRole) ?>;
+window.isOperator = <?= json_encode($isOperator) ?>;
 window.hasAssignedWork = <?= json_encode($hasAssignedWork) ?>;
 window.showSubcategoriesOnly = <?= json_encode($showSubcategoriesOnly) ?>;
 window.assignedCategory = <?= json_encode($workerAssignment['category_name'] ?? null) ?>;
@@ -1025,10 +1054,10 @@ function filterWorkersByUnit(unitName) {
                 </a>
             </div>
 
-            <!-- Download Complete User History CSV Button -->
-            <a href="daily_output.php?worker_id=<?= $selectedWorkerId ?>&export=csv" class="btn btn-outline btn-sm" style="padding: 0.28rem 0.65rem; font-size: 0.78rem; border-color: rgba(16,185,129,0.45); color: #34d399; background: rgba(16,185,129,0.08); font-weight: 700; display: inline-flex; align-items: center; gap: 0.35rem;" title="Download complete stitching history of <?= htmlspecialchars($worker['name']) ?> as Excel / CSV">
+            <!-- Download User History Button (Opens Month-wise & Date Range Modal) -->
+            <button type="button" class="btn btn-outline btn-sm" onclick="openDownloadHistoryModal()" style="padding: 0.28rem 0.65rem; font-size: 0.78rem; border-color: rgba(16,185,129,0.45); color: #34d399; background: rgba(16,185,129,0.08); font-weight: 700; display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer;" title="Download stitching history month-wise or by date range">
                 <i class="fa-solid fa-file-arrow-down"></i> Download History
-            </a>
+            </button>
 
             <!-- Leaderboard Quick Link -->
             <a href="leaderboard.php" class="btn btn-outline btn-sm" style="padding: 0.28rem 0.65rem; font-size: 0.78rem; border-color: rgba(245,158,11,0.4); color: #fbbf24;">
@@ -1351,28 +1380,35 @@ function filterWorkersByUnit(unitName) {
                 </span>
             </div>
             <p class="text-muted" style="font-size: 0.82rem; margin-top: 0.25rem;">
-                Showing operators in <strong id="clothLbUnitSubtitle" class="text-cyan"><?= htmlspecialchars($worker['unit'] ?? 'Unit 1') ?></strong> priority-wise (Highest pieces = 1st Place 🥇).
+                <?php if ($isUserRole || $isOperator): ?>
+                    Showing your personal stitching output &amp; priority status for today.
+                <?php else: ?>
+                    Showing operators in <strong id="clothLbUnitSubtitle" class="text-cyan"><?= htmlspecialchars($worker['unit'] ?? 'Unit 1') ?></strong> priority-wise (Highest pieces = 1st Place 🥇).
+                <?php endif; ?>
             </p>
         </div>
         <div style="display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap;">
-            <!-- Unit Filter Tabs for Priority Leaderboard -->
-            <div id="clothLbUnitTabs" style="display: inline-flex; background: rgba(0, 0, 0, 0.35); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 3px; gap: 3px;">
-                <?php foreach ($productionUnits as $pu): 
-                    $uName = $pu['unit_name'];
-                    $isCur = ($worker && $worker['unit'] === $uName);
-                    $uColor = ($uName === 'Unit 1') ? 'cyan' : 'pink';
-                ?>
-                <button type="button" class="btn btn-xs cloth-lb-unit-btn <?= $isCur ? 'active active-' . $uColor : '' ?>" data-unit="<?= htmlspecialchars($uName) ?>" data-color="<?= $uColor ?>" style="padding: 0.25rem 0.65rem; font-size: 0.75rem; border-radius: var(--radius-sm); font-weight: 700;">
-                    <i class="fa-solid <?= htmlspecialchars($pu['icon'] ?? 'fa-industry') ?>" style="font-size: 0.7rem;"></i> <?= htmlspecialchars($pu['unit_title']) ?>
-                </button>
-                <?php endforeach; ?>
-                <button type="button" class="btn btn-xs cloth-lb-unit-btn" data-unit="All" data-color="emerald" style="padding: 0.25rem 0.65rem; font-size: 0.75rem; border-radius: var(--radius-sm); font-weight: 600; opacity: 0.85;">
-                    <i class="fa-solid fa-layer-group" style="font-size: 0.7rem;"></i> All Units
-                </button>
-            </div>
+            <?php if (!$isUserRole && !$isOperator): ?>
+                <!-- Unit Filter Tabs for Priority Leaderboard (Admin only) -->
+                <div id="clothLbUnitTabs" style="display: inline-flex; background: rgba(0, 0, 0, 0.35); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 3px; gap: 3px;">
+                    <?php foreach ($productionUnits as $pu): 
+                        $uName = $pu['unit_name'];
+                        $isCur = ($worker && $worker['unit'] === $uName);
+                        $uColor = ($uName === 'Unit 1') ? 'cyan' : 'pink';
+                    ?>
+                    <button type="button" class="btn btn-xs cloth-lb-unit-btn <?= $isCur ? 'active active-' . $uColor : '' ?>" data-unit="<?= htmlspecialchars($uName) ?>" data-color="<?= $uColor ?>" style="padding: 0.25rem 0.65rem; font-size: 0.75rem; border-radius: var(--radius-sm); font-weight: 700;">
+                        <i class="fa-solid <?= htmlspecialchars($pu['icon'] ?? 'fa-industry') ?>" style="font-size: 0.7rem;"></i> <?= htmlspecialchars($pu['unit_title']) ?>
+                    </button>
+                    <?php endforeach; ?>
+                    <button type="button" class="btn btn-xs cloth-lb-unit-btn" data-unit="All" data-color="emerald" style="padding: 0.25rem 0.65rem; font-size: 0.75rem; border-radius: var(--radius-sm); font-weight: 600; opacity: 0.85;">
+                        <i class="fa-solid fa-layer-group" style="font-size: 0.7rem;"></i> All Units
+                    </button>
+                </div>
+            <?php endif; ?>
 
             <div id="clothLbActiveBadge" class="badge-pill" style="background: rgba(6, 182, 212, 0.12); color: var(--accent-cyan); border: 1px solid rgba(6, 182, 212, 0.3); font-size: 0.85rem; padding: 0.4rem 0.85rem;">
-                <i class="fa-solid fa-users"></i> <span id="clothLbParticipantsCount">0</span> Operators Ranked
+                <i class="fa-solid <?= ($isUserRole || $isOperator) ? 'fa-user-check' : 'fa-users' ?>"></i> 
+                <span id="clothLbParticipantsCount"><?= ($isUserRole || $isOperator) ? 'Personal Status' : '0 Operators Ranked' ?></span>
             </div>
         </div>
     </div>
@@ -1630,7 +1666,8 @@ document.addEventListener('DOMContentLoaded', () => {
         return 0;
     }
 
-    const currentWorkerId = <?= (int)$worker['id'] ?>;
+    const currentWorkerId = <?= (int)($worker['id'] ?? 0) ?>;
+    const currentWorkerUid = "<?= addslashes($worker['unique_id'] ?? '') ?>";
     let currentClothLbUnit = "<?= htmlspecialchars($worker['unit'] ?? 'Unit 1') ?>";
     let lastFetchedClothMaterial = '';
 
@@ -1658,7 +1695,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (card) card.style.display = 'block';
         if (headingGarment) {
             const isMaternity = materialName.toLowerCase().includes('maternity');
-            headingGarment.innerHTML = (isMaternity ? '🤰 ' : '👕 ') + escapeHtml(materialName) + ' Priority Ranking';
+            const isOpUser = Boolean(window.isOperator || window.isUserRole);
+            const titleSuffix = isOpUser ? ' Stitched Status' : ' Priority Ranking';
+            headingGarment.innerHTML = (isMaternity ? '🤰 ' : '👕 ') + escapeHtml(materialName) + titleSuffix;
         }
 
         if (unitBadge) {
@@ -1701,41 +1740,58 @@ document.addEventListener('DOMContentLoaded', () => {
             const result = await res.json();
 
             if (result.success && result.data) {
-                const workers = result.data;
-                const activeWorkers = workers.filter(w => parseInt(w.category_pieces) > 0);
-                if (participantsCount) participantsCount.innerText = activeWorkers.length;
+                let workers = result.data;
+                const isOpUser = Boolean(window.isOperator || window.isUserRole);
 
-                // Render Micro Podium (Top 3 Priority Performers with pieces > 0)
+                // If logged in as operator/worker, show ONLY the logged-in user's own status
+                if (isOpUser) {
+                    workers = workers.filter(w => (
+                        w.id == currentWorkerId || 
+                        (window.currentSelectedWorkerId && w.id == window.currentSelectedWorkerId) ||
+                        (currentWorkerUid && w.unique_id == currentWorkerUid)
+                    ));
+                }
+
+                const activeWorkers = workers.filter(w => parseInt(w.category_pieces) > 0);
+                if (participantsCount) {
+                    participantsCount.innerText = isOpUser ? (activeWorkers.length > 0 ? 'Active Today' : 'No Pieces Yet') : activeWorkers.length;
+                }
+
+                // Render Micro Podium (Top Priority Performers)
                 if (podiumContainer) {
-                    const top3 = activeWorkers.slice(0, 3);
-                    if (top3.length === 0) {
+                    const topWorkers = isOpUser ? workers : activeWorkers.slice(0, 3);
+                    if (topWorkers.length === 0) {
                         podiumContainer.innerHTML = `
                             <div style="grid-column: 1 / -1; text-align: center; padding: 1.5rem; background: rgba(255,255,255,0.02); border: 1px dashed rgba(255,255,255,0.1); border-radius: var(--radius-md);">
                                 <i class="fa-solid fa-shirt text-muted" style="font-size: 1.5rem; margin-bottom: 0.5rem; opacity: 0.5;"></i>
-                                <div style="color: var(--text-muted); font-size: 0.88rem;">No operators have completed pieces for <strong>${escapeHtml(materialName)}</strong> yet. Log pieces above to take 1st place!</div>
+                                <div style="color: var(--text-muted); font-size: 0.88rem;">No pieces completed for <strong>${escapeHtml(materialName)}</strong> yet today. Log pieces above to get started!</div>
                             </div>
                         `;
                     } else {
                         let podiumHtml = '';
-                        top3.forEach((w, idx) => {
+                        topWorkers.forEach((w, idx) => {
                             const rankNum = idx + 1;
                             const isCurrentUser = (w.id == currentWorkerId);
                             let medalBadge = '';
                             let borderColor = 'rgba(255,255,255,0.08)';
                             let bgGlow = 'rgba(255,255,255,0.02)';
 
-                            if (rankNum === 1) {
+                            if (rankNum === 1 && !isOpUser) {
                                 medalBadge = '<span style="background: rgba(251, 191, 36, 0.2); color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.4); padding: 0.25rem 0.6rem; border-radius: 9999px; font-weight: 800; font-size: 0.75rem;"><i class="fa-solid fa-crown"></i> 1st Place (Priority #1)</span>';
                                 borderColor = 'rgba(251, 191, 36, 0.45)';
                                 bgGlow = 'linear-gradient(180deg, rgba(251, 191, 36, 0.12) 0%, rgba(18, 24, 38, 0.95) 100%)';
-                            } else if (rankNum === 2) {
+                            } else if (rankNum === 2 && !isOpUser) {
                                 medalBadge = '<span style="background: rgba(203, 213, 225, 0.2); color: #cbd5e1; border: 1px solid rgba(203, 213, 225, 0.4); padding: 0.25rem 0.6rem; border-radius: 9999px; font-weight: 800; font-size: 0.75rem;"><i class="fa-solid fa-medal"></i> 2nd Place (Priority #2)</span>';
                                 borderColor = 'rgba(203, 213, 225, 0.4)';
                                 bgGlow = 'linear-gradient(180deg, rgba(203, 213, 225, 0.08) 0%, rgba(18, 24, 38, 0.95) 100%)';
-                            } else if (rankNum === 3) {
+                            } else if (rankNum === 3 && !isOpUser) {
                                 medalBadge = '<span style="background: rgba(217, 119, 6, 0.2); color: #f59e0b; border: 1px solid rgba(217, 119, 6, 0.4); padding: 0.25rem 0.6rem; border-radius: 9999px; font-weight: 800; font-size: 0.75rem;"><i class="fa-solid fa-award"></i> 3rd Place (Priority #3)</span>';
                                 borderColor = 'rgba(217, 119, 6, 0.35)';
                                 bgGlow = 'linear-gradient(180deg, rgba(217, 119, 6, 0.06) 0%, rgba(18, 24, 38, 0.95) 100%)';
+                            } else {
+                                medalBadge = '<span style="background: rgba(6, 182, 212, 0.18); color: var(--accent-cyan); border: 1px solid rgba(6, 182, 212, 0.35); padding: 0.25rem 0.6rem; border-radius: 9999px; font-weight: 800; font-size: 0.75rem;"><i class="fa-solid fa-user-check"></i> Your Stitching Status</span>';
+                                borderColor = 'rgba(6, 182, 212, 0.4)';
+                                bgGlow = 'linear-gradient(180deg, rgba(6, 182, 212, 0.08) 0%, rgba(18, 24, 38, 0.95) 100%)';
                             }
 
                             podiumHtml += `
@@ -1745,7 +1801,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                         ${isCurrentUser ? '<span class="badge-pill" style="background: rgba(6, 182, 212, 0.2); color: var(--accent-cyan); font-size: 0.72rem; border: 1px solid rgba(6, 182, 212, 0.4);"><i class="fa-solid fa-user-check"></i> YOU</span>' : ''}
                                     </div>
                                     <div style="display: flex; align-items: center; gap: 0.75rem;">
-                                        <div style="width: 42px; height: 42px; border-radius: 50%; background: ${rankNum === 1 ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'rgba(255,255,255,0.08)'}; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1.1rem; color: #fff; border: 2px solid ${borderColor}; flex-shrink: 0;">
+                                        <div style="width: 42px; height: 42px; border-radius: 50%; background: ${rankNum === 1 && !isOpUser ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #06b6d4, #3b82f6)'}; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1.1rem; color: #fff; border: 2px solid ${borderColor}; flex-shrink: 0;">
                                             ${escapeHtml(w.name.charAt(0).toUpperCase())}
                                         </div>
                                         <div style="min-width: 0; flex: 1;">
@@ -1767,8 +1823,8 @@ document.addEventListener('DOMContentLoaded', () => {
                                     </div>
                                     <div style="margin-top: 0.9rem; padding-top: 0.75rem; border-top: 1px dashed rgba(255,255,255,0.08); display: flex; align-items: baseline; justify-content: space-between;">
                                         <span class="text-muted" style="font-size: 0.8rem;">Stitched Pieces:</span>
-                                        <span style="font-family: var(--font-heading); font-size: 1.35rem; font-weight: 800; color: ${rankNum === 1 ? '#fbbf24' : 'var(--accent-emerald)'};">
-                                            ${w.category_pieces.toLocaleString()} <span style="font-size: 0.8rem; font-weight: normal; color: var(--text-muted);">pcs</span>
+                                        <span style="font-family: var(--font-heading); font-size: 1.35rem; font-weight: 800; color: ${rankNum === 1 && !isOpUser ? '#fbbf24' : 'var(--accent-emerald)'};">
+                                            ${(parseInt(w.category_pieces) || 0).toLocaleString()} <span style="font-size: 0.8rem; font-weight: normal; color: var(--text-muted);">pcs</span>
                                         </span>
                                     </div>
                                 </div>
@@ -1778,7 +1834,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }
 
-                // Render Full Priority Ranking Table
+                // Render Priority Ranking Table
                 if (tableBody) {
                     if (workers.length === 0) {
                         tableBody.innerHTML = `<tr><td colspan="6" class="text-center text-muted" style="padding: 2rem;">No operator records found for this garment.</td></tr>`;
@@ -1796,20 +1852,26 @@ document.addEventListener('DOMContentLoaded', () => {
                         let statusLabel = '';
                         let rowStyle = isCurrentUser ? 'background: rgba(6, 182, 212, 0.08); border-left: 3px solid var(--accent-cyan);' : '';
 
-                        if (rankNum === 1) {
+                        if (rankNum === 1 && !isOpUser) {
                             rankBadge = `<span class="badge-pill" style="background: rgba(251, 191, 36, 0.2); color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.5); font-weight: 800; font-size: 0.85rem;"><i class="fa-solid fa-crown"></i> #1</span>`;
                             statusLabel = `<span class="badge-pill" style="background: rgba(251, 191, 36, 0.15); color: #fbbf24; font-size: 0.78rem; font-weight: 700;"><i class="fa-solid fa-trophy"></i> 1st Place (Priority Leader)</span>`;
-                        } else if (rankNum === 2) {
+                        } else if (rankNum === 2 && !isOpUser) {
                             rankBadge = `<span class="badge-pill" style="background: rgba(203, 213, 225, 0.2); color: #cbd5e1; border: 1px solid rgba(203, 213, 225, 0.5); font-weight: 800; font-size: 0.85rem;"><i class="fa-solid fa-medal"></i> #2</span>`;
                             statusLabel = `<span class="badge-pill" style="background: rgba(203, 213, 225, 0.15); color: #cbd5e1; font-size: 0.78rem; font-weight: 700;">🥈 2nd Place</span>`;
-                        } else if (rankNum === 3) {
+                        } else if (rankNum === 3 && !isOpUser) {
                             rankBadge = `<span class="badge-pill" style="background: rgba(217, 119, 6, 0.2); color: #f59e0b; border: 1px solid rgba(217, 119, 6, 0.5); font-weight: 800; font-size: 0.85rem;"><i class="fa-solid fa-award"></i> #3</span>`;
                             statusLabel = `<span class="badge-pill" style="background: rgba(217, 119, 6, 0.15); color: #f59e0b; font-size: 0.78rem; font-weight: 700;">🥉 3rd Place</span>`;
                         } else if (rankNum) {
-                            rankBadge = `<span class="text-muted font-bold" style="font-size: 0.9rem;">#${rankNum}</span>`;
-                            statusLabel = `<span class="text-muted" style="font-size: 0.78rem;">Rank #${rankNum}</span>`;
+                            rankBadge = isOpUser 
+                                ? `<span class="badge-pill" style="background: rgba(6, 182, 212, 0.18); color: var(--accent-cyan); border: 1px solid rgba(6, 182, 212, 0.35); font-weight: 800; font-size: 0.82rem;"><i class="fa-solid fa-user-check"></i> YOU</span>` 
+                                : `<span class="text-muted font-bold" style="font-size: 0.9rem;">#${rankNum}</span>`;
+                            statusLabel = isOpUser 
+                                ? `<span class="badge-pill" style="background: rgba(16, 185, 129, 0.18); color: var(--accent-emerald); font-weight: 700; font-size: 0.78rem;"><i class="fa-solid fa-circle-check"></i> Stitched Today</span>` 
+                                : `<span class="text-muted" style="font-size: 0.78rem;">Rank #${rankNum}</span>`;
                         } else {
-                            rankBadge = `<span class="text-muted" style="font-size: 0.82rem;">-</span>`;
+                            rankBadge = isOpUser 
+                                ? `<span class="badge-pill" style="background: rgba(6, 182, 212, 0.18); color: var(--accent-cyan); border: 1px solid rgba(6, 182, 212, 0.35); font-weight: 800; font-size: 0.82rem;"><i class="fa-solid fa-user-check"></i> YOU</span>` 
+                                : `<span class="text-muted" style="font-size: 0.82rem;">-</span>`;
                             statusLabel = `<span class="text-muted" style="font-size: 0.78rem;">No pieces yet</span>`;
                         }
 
@@ -3108,6 +3170,14 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
+        // Validate that targetGarment exists among currently visible chips, otherwise reset
+        if (targetGarment) {
+            const matchingChip = document.querySelector(`.garment-chip-btn[data-garment="${targetGarment}" i]`);
+            if (!matchingChip) {
+                targetGarment = '';
+            }
+        }
+
         // Default to first available chip
         if (!targetGarment) {
             const firstChip = document.querySelector('.garment-chip-btn');
@@ -3201,5 +3271,143 @@ document.addEventListener('DOMContentLoaded', () => {
     </div>
 </div>
 <?php endif; ?>
+
+<!-- Modal: Month-Wise & Date-Range Stitching History Download -->
+<div id="downloadHistoryModal" class="modal-overlay" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 9999; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
+    <div class="modal-container" style="background: var(--card-bg, #1e293b); border: 1px solid var(--border-color, #334155); border-radius: var(--radius-lg, 12px); width: 92%; max-width: 520px; max-height: 90vh; overflow-y: auto; padding: 1.5rem; box-shadow: 0 20px 40px rgba(0,0,0,0.5);">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.25rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.75rem;">
+            <div>
+                <h3 style="margin: 0; font-size: 1.2rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 0.5rem;">
+                    <i class="fa-solid fa-file-arrow-down text-emerald"></i> Download Stitching History
+                </h3>
+                <p class="text-muted" style="margin: 0.35rem 0 0 0; font-size: 0.82rem;">
+                    Export stitching output records for <strong class="text-cyan"><?= htmlspecialchars($worker['name'] ?? 'Worker') ?></strong> (<?= htmlspecialchars($worker['unique_id'] ?? '') ?>)
+                </p>
+            </div>
+            <button type="button" onclick="closeDownloadHistoryModal()" style="background: none; border: none; font-size: 1.25rem; color: var(--text-muted); cursor: pointer; padding: 0.25rem 0.5rem;">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+
+        <form method="GET" action="daily_output.php" id="downloadHistoryForm" style="display: flex; flex-direction: column; gap: 1rem;">
+            <input type="hidden" name="worker_id" value="<?= (int)$selectedWorkerId ?>">
+            <input type="hidden" name="export" value="csv">
+
+            <!-- Month & Period Quick Presets -->
+            <div>
+                <label style="display: block; font-size: 0.8rem; font-weight: 700; margin-bottom: 0.45rem; color: var(--text-secondary);">
+                    Select Month or Preset:
+                </label>
+                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.45rem;">
+                    <button type="button" class="btn btn-outline btn-sm preset-btn active" id="presetThisMonth" onclick="setExportPreset('this_month')" style="padding: 0.4rem 0.3rem; font-size: 0.75rem; font-weight: 700;">This Month</button>
+                    <button type="button" class="btn btn-outline btn-sm preset-btn" id="presetLastMonth" onclick="setExportPreset('last_month')" style="padding: 0.4rem 0.3rem; font-size: 0.75rem; font-weight: 700;">Last Month</button>
+                    <button type="button" class="btn btn-outline btn-sm preset-btn" id="presetToday" onclick="setExportPreset('today')" style="padding: 0.4rem 0.3rem; font-size: 0.75rem; font-weight: 700;">Today</button>
+                    <button type="button" class="btn btn-outline btn-sm preset-btn" id="presetAllTime" onclick="setExportPreset('all_time')" style="padding: 0.4rem 0.3rem; font-size: 0.75rem; font-weight: 700;">All Time</button>
+                </div>
+            </div>
+
+            <!-- Custom Start Date & End Date Inputs -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; background: rgba(255, 255, 255, 0.02); padding: 0.85rem; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
+                <div>
+                    <label for="exportStartDate" style="display: block; font-size: 0.78rem; font-weight: 600; margin-bottom: 0.35rem; color: var(--text-secondary);">
+                        <i class="fa-regular fa-calendar text-cyan"></i> Start Date:
+                    </label>
+                    <input type="date" id="exportStartDate" name="start_date" class="form-control" style="font-size: 0.85rem; padding: 0.45rem 0.65rem;">
+                </div>
+                <div>
+                    <label for="exportEndDate" style="display: block; font-size: 0.78rem; font-weight: 600; margin-bottom: 0.35rem; color: var(--text-secondary);">
+                        <i class="fa-regular fa-calendar text-cyan"></i> End Date:
+                    </label>
+                    <input type="date" id="exportEndDate" name="end_date" class="form-control" style="font-size: 0.85rem; padding: 0.45rem 0.65rem;">
+                </div>
+            </div>
+
+            <div style="background: rgba(16, 185, 129, 0.06); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: var(--radius-sm); padding: 0.65rem 0.85rem; font-size: 0.78rem; color: var(--text-secondary); display: flex; align-items: center; gap: 0.6rem;">
+                <i class="fa-solid fa-file-csv text-emerald" style="font-size: 1.25rem;"></i>
+                <div>
+                    <strong style="color: #34d399;">Excel &amp; Sheets Ready:</strong>
+                    <div class="text-muted" style="font-size: 0.75rem;">Includes date, shift, unit, subcategory, pieces count, and timestamp.</div>
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 0.6rem; justify-content: flex-end; margin-top: 0.25rem;">
+                <button type="button" class="btn btn-outline btn-sm" onclick="closeDownloadHistoryModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary btn-sm" style="background: linear-gradient(135deg, #10b981, #059669); border: none; font-weight: 700; display: inline-flex; align-items: center; gap: 0.45rem; padding: 0.55rem 1.15rem; box-shadow: 0 4px 12px rgba(16,185,129,0.3);">
+                    <i class="fa-solid fa-file-arrow-down"></i> Download CSV History
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function openDownloadHistoryModal() {
+    const modal = document.getElementById('downloadHistoryModal');
+    if (modal) {
+        modal.style.display = 'flex';
+        setExportPreset('this_month');
+    }
+}
+
+function closeDownloadHistoryModal() {
+    const modal = document.getElementById('downloadHistoryModal');
+    if (modal) {
+        modal.style.display = 'none';
+    }
+}
+
+function setExportPreset(preset) {
+    const startInput = document.getElementById('exportStartDate');
+    const endInput = document.getElementById('exportEndDate');
+    if (!startInput || !endInput) return;
+
+    const today = new Date();
+    const pad = (n) => n.toString().padStart(2, '0');
+    const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+    if (preset === 'today') {
+        const tStr = fmt(today);
+        startInput.value = tStr;
+        endInput.value = tStr;
+    } else if (preset === 'this_month') {
+        const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+        startInput.value = fmt(firstDay);
+        endInput.value = fmt(today);
+    } else if (preset === 'last_month') {
+        const firstDayLastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+        const lastDayLastMonth = new Date(today.getFullYear(), today.getMonth(), 0);
+        startInput.value = fmt(firstDayLastMonth);
+        endInput.value = fmt(lastDayLastMonth);
+    } else if (preset === 'all_time') {
+        startInput.value = '';
+        endInput.value = '';
+    }
+
+    // Highlight active preset button
+    document.querySelectorAll('.preset-btn').forEach(btn => {
+        btn.classList.remove('btn-primary');
+        btn.classList.add('btn-outline');
+    });
+    const activeBtnMap = {
+        'this_month': 'presetThisMonth',
+        'last_month': 'presetLastMonth',
+        'today': 'presetToday',
+        'all_time': 'presetAllTime'
+    };
+    const activeBtn = document.getElementById(activeBtnMap[preset]);
+    if (activeBtn) {
+        activeBtn.classList.remove('btn-outline');
+        activeBtn.classList.add('btn-primary');
+    }
+}
+
+// Close modal when clicking outside
+window.addEventListener('click', function(e) {
+    const modal = document.getElementById('downloadHistoryModal');
+    if (modal && e.target === modal) {
+        closeDownloadHistoryModal();
+    }
+});
+</script>
 
 <?php include __DIR__ . '/includes/footer.php'; ?>
