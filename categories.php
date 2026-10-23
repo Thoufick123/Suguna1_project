@@ -435,6 +435,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
                         <!-- Category Master Actions -->
                         <div style="display: flex; align-items: center; gap: 0.45rem;">
+                            <button type="button" class="btn btn-outline btn-xs btn-quick-add-subcat" data-cat="${escapeHtml(catName)}" title="Add a new subcategory under ${escapeHtml(catName)}" style="font-size: 0.75rem; padding: 0.25rem 0.55rem; color: var(--accent-cyan); border-color: rgba(6,182,212,0.4);">
+                                <i class="fa-solid fa-plus"></i> Add Subcategory
+                            </button>
                             <button type="button" class="btn btn-outline btn-xs btn-toggle-cat" data-type="category" data-cat="${escapeHtml(catName)}" data-status="${isCatActive ? 'Disabled' : 'Active'}" style="font-size: 0.75rem; padding: 0.25rem 0.55rem; color: ${isCatActive ? 'var(--accent-amber)' : 'var(--accent-emerald)'};">
                                 <i class="fa-solid fa-${isCatActive ? 'ban' : 'circle-check'}"></i> ${isCatActive ? 'Disable All' : 'Enable All'}
                             </button>
@@ -799,13 +802,34 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (typeof showToast === 'function') showToast(data.message, 'success');
                     } else {
                         alert(data.message || 'Error deleting category');
-                        btn.disabled = false;
                     }
                 } catch (e) {
                     console.error(e);
                     alert('Network error while deleting.');
                     btn.disabled = false;
                 }
+            };
+        });
+
+        // Quick "+ Add Subcategory" button on category card
+        document.querySelectorAll('.btn-quick-add-subcat').forEach(btn => {
+            btn.onclick = () => {
+                const cat = btn.dataset.cat || '';
+                if (addGarmentCard) {
+                    addGarmentCard.style.display = 'block';
+                    if (toggleAddText) toggleAddText.innerText = 'Hide Add Form';
+                }
+                if (catInput) {
+                    catInput.value = cat;
+                }
+                if (subcatInput) {
+                    subcatInput.value = '';
+                    subcatInput.focus();
+                }
+                if (subsubcatInput) {
+                    subsubcatInput.value = '';
+                }
+                addGarmentCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
             };
         });
     }

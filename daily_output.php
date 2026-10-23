@@ -77,6 +77,90 @@ if ($selectedWorkerId > 0) {
     $worker = null;
 }
 
+// =========================================================================
+// CSV EXPORT ENGINE FOR OPERATOR / WORKER COMPLETE HISTORY
+// =========================================================================
+if (isset($_GET['export']) && $_GET['export'] === 'csv' && $worker) {
+    $safeName = preg_replace('/[^a-zA-Z0-9_-]/', '_', strtolower($worker['name']));
+    $safeUid  = preg_replace('/[^a-zA-Z0-9_-]/', '_', strtolower($worker['unique_id']));
+    $filename = "fabriqpro_history_{$safeUid}_{$safeName}_" . date('Ymd_His') . ".csv";
+
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="' . $filename . '"');
+    header('Pragma: no-cache');
+    header('Expires: 0');
+
+    $out = fopen('php://output', 'w');
+    // UTF-8 BOM for Microsoft Excel compatibility
+    fputs($out, "\xEF\xBB\xBF");
+
+    // CSV Headers
+    fputcsv($out, [
+        'Log ID',
+        'Work Date',
+        'Shift',
+        'Worker ID',
+        'Worker Name',
+        'Production Unit',
+        'Role / Designation',
+        'Garment / Subcategory Stitched',
+        'Pieces Stitched',
+        'Logged At (Timestamp)',
+        'Notes'
+    ]);
+
+    $csvStmt = $pdo->prepare("
+        SELECT pl.id, pl.work_date, pl.shift, w.unique_id, w.name, 
+               COALESCE(NULLIF(pl.unit, ''), w.unit) as unit, w.role,
+               pl.material_name, pl.piece_count, pl.created_at, pl.notes
+        FROM piece_logs pl
+        JOIN workers w ON w.id = pl.worker_id
+        WHERE pl.worker_id = :wid
+        ORDER BY pl.work_date DESC, pl.id DESC
+    ");
+    $csvStmt->execute([':wid' => $worker['id']]);
+
+    $totalExportPieces = 0;
+    $totalExportRows   = 0;
+
+    while ($r = $csvStmt->fetch(PDO::FETCH_ASSOC)) {
+        $totalExportRows++;
+        $totalExportPieces += (int)$r['piece_count'];
+        fputcsv($out, [
+            $r['id'],
+            $r['work_date'],
+            $r['shift'] ?: 'Day Shift',
+            $r['unique_id'],
+            $r['name'],
+            $r['unit'],
+            $r['role'] ?: 'Operator',
+            $r['material_name'],
+            (int)$r['piece_count'],
+            $r['created_at'],
+            $r['notes'] ?: ''
+        ]);
+    }
+
+    // Blank row & Totals Summary
+    fputcsv($out, []);
+    fputcsv($out, [
+        'TOTAL SUMMARY',
+        "Records: $totalExportRows",
+        '',
+        $worker['unique_id'],
+        $worker['name'],
+        $worker['unit'],
+        $worker['role'],
+        'LIFETIME PIECES:',
+        $totalExportPieces,
+        date('Y-m-d H:i:s'),
+        'Full Worker History'
+    ]);
+
+    fclose($out);
+    exit;
+}
+
 $workerTransferredFrom = '';
 $workerTransferType = '';
 if ($worker) {
@@ -233,7 +317,12 @@ if ($selectedWorkerId > 0) {
             $workerAssignments = $assignStmt2->fetchAll(PDO::FETCH_ASSOC);
         }
 
+        $assignedSubcategoryNames = [];
         foreach ($workerAssignments as $wa) {
+            if (!empty($wa['subcategory_name'])) {
+                $sClean = trim($wa['subcategory_name']);
+                $assignedSubcategoryNames[strtolower($sClean)] = $sClean;
+            }
             if (!empty($wa['category_name'])) {
                 $cClean = trim($wa['category_name']);
                 $assignedCategoryNames[strtolower($cClean)] = $cClean;
@@ -936,6 +1025,11 @@ function filterWorkersByUnit(unitName) {
                 </a>
             </div>
 
+            <!-- Download Complete User History CSV Button -->
+            <a href="daily_output.php?worker_id=<?= $selectedWorkerId ?>&export=csv" class="btn btn-outline btn-sm" style="padding: 0.28rem 0.65rem; font-size: 0.78rem; border-color: rgba(16,185,129,0.45); color: #34d399; background: rgba(16,185,129,0.08); font-weight: 700; display: inline-flex; align-items: center; gap: 0.35rem;" title="Download complete stitching history of <?= htmlspecialchars($worker['name']) ?> as Excel / CSV">
+                <i class="fa-solid fa-file-arrow-down"></i> Download History
+            </a>
+
             <!-- Leaderboard Quick Link -->
             <a href="leaderboard.php" class="btn btn-outline btn-sm" style="padding: 0.28rem 0.65rem; font-size: 0.78rem; border-color: rgba(245,158,11,0.4); color: #fbbf24;">
                 <i class="fa-solid fa-trophy"></i> Leaderboard
@@ -997,9 +1091,11 @@ function filterWorkersByUnit(unitName) {
                         </span>
                         <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
                             <span style="color: #34d399; font-weight: 700;">Assigned Work for Today:</span>
-                            <?php foreach ($assignedCategoryNames as $catDisplayName): ?>
+                            <?php 
+                            $assignedDisplayItems = !empty($assignedSubcategoryNames) ? $assignedSubcategoryNames : $assignedCategoryNames;
+                            foreach ($assignedDisplayItems as $itemDisplayName): ?>
                                 <span class="badge-pill" style="background: rgba(16,185,129,0.2); color: #34d399; font-weight: 700; border: 1px solid rgba(16,185,129,0.4); font-size: 0.78rem;">
-                                    <i class="fa-solid fa-shirt"></i> <?= htmlspecialchars($catDisplayName) ?>
+                                    <i class="fa-solid fa-tag"></i> <?= htmlspecialchars($itemDisplayName) ?>
                                 </span>
                             <?php endforeach; ?>
                         </div>
@@ -1120,9 +1216,6 @@ function filterWorkersByUnit(unitName) {
                                 <i class="fa-solid <?= $g['icon'] ?> garment-chip-icon" style="color: <?= $g['color'] ?>;"></i>
                                 <div style="display: flex; flex-direction: column; text-align: left; min-width: 0;">
                                     <span class="garment-chip-title" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"><?= htmlspecialchars($g['name']) ?></span>
-                                    <?php if (!empty($parentCat) && $showSubcategoriesOnly): ?>
-                                        <span style="font-size: 0.68rem; color: var(--text-muted); opacity: 0.85; font-weight: normal;"><?= htmlspecialchars($parentCat) ?></span>
-                                    <?php endif; ?>
                                 </div>
                             </div>
                             <span class="garment-chip-count-badge" id="<?= $badgeId ?>" style="font-size: 0.72rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 50px; background: <?= $gTodayCount > 0 ? 'rgba(16,185,129,0.22)' : 'rgba(255,255,255,0.06)' ?>; color: <?= $gTodayCount > 0 ? '#10b981' : 'var(--text-muted)' ?>; border: 1px solid <?= $gTodayCount > 0 ? 'rgba(16,185,129,0.45)' : 'rgba(255,255,255,0.08)' ?>; white-space: nowrap; flex-shrink: 0;">
@@ -1904,11 +1997,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const displayNameEl = document.getElementById('selectedGarmentDisplayName');
         if (displayNameEl) displayNameEl.innerText = matName;
         if (breadcrumbText) {
-            if (foundParentCat && foundParentCat.toLowerCase() !== matName.toLowerCase()) {
-                breadcrumbText.innerText = `(${foundParentCat} › ${matName})`;
-            } else {
-                breadcrumbText.innerText = '';
-            }
+            breadcrumbText.innerText = '';
         }
         if (breadcrumbBox) breadcrumbBox.style.display = 'flex';
 
@@ -2797,7 +2886,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         <i class="fa-solid ${item.icon || 'fa-tag'} garment-chip-icon" style="color: ${item.color || '#06b6d4'};"></i>
                         <div style="display: flex; flex-direction: column; text-align: left; min-width: 0;">
                             <span class="garment-chip-title" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(itemName)}</span>
-                            ${parentCat && mode === 'subcategory' ? `<span style="font-size: 0.68rem; color: var(--text-muted); opacity: 0.85; font-weight: normal;">${escapeHtml(parentCat)}</span>` : ''}
                         </div>
                     </div>
                     <span class="garment-chip-count-badge" id="${badgeId}" style="font-size: 0.72rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 50px; background: ${gTodayCount > 0 ? 'rgba(16,185,129,0.22)' : 'rgba(255,255,255,0.06)'}; color: ${gTodayCount > 0 ? '#10b981' : 'var(--text-muted)'}; border: 1px solid ${gTodayCount > 0 ? 'rgba(16,185,129,0.45)' : 'rgba(255,255,255,0.08)'}; white-space: nowrap; flex-shrink: 0;">
