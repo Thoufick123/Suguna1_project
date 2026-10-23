@@ -91,6 +91,61 @@ try {
         $w['transfer_type'] = $w['transfer_type'] ?? ($w['is_switched'] ? 'temporary' : '');
     };
 
+    if (!function_exists('getNextWorkerId')) {
+        function getNextWorkerId($pdo, $unit) {
+            $prefix = 'PU001';
+            $unitName = $unit;
+            $unitTitle = $unit;
+
+            $uStmt = $pdo->prepare("SELECT unit_name, unit_title, unit_code FROM production_units WHERE unit_name = :unit OR unit_title = :unit OR unit_code = :unit LIMIT 1");
+            $uStmt->execute([':unit' => $unit]);
+            $uRow = $uStmt->fetch(PDO::FETCH_ASSOC);
+            if ($uRow) {
+                $unitName = $uRow['unit_name'];
+                $unitTitle = $uRow['unit_title'];
+                if (!empty($uRow['unit_code'])) {
+                    $prefix = strtoupper(trim($uRow['unit_code']));
+                }
+            } elseif (preg_match('/(\d+)/', $unit, $m)) {
+                $prefix = 'PU' . sprintf('%03d', (int)$m[1]);
+                $unitName = 'Unit ' . (int)$m[1];
+            }
+
+            // 1. Count active workers currently assigned to this unit
+            $cStmt = $pdo->prepare("SELECT COUNT(*) FROM workers WHERE unit = :u1 OR unit = :u2");
+            $cStmt->execute([':u1' => $unitName, ':u2' => $unitTitle]);
+            $currentCount = (int)$cStmt->fetchColumn();
+
+            // Sequential ID corresponding to (current count + 1)-th worker
+            $candidateNum = $currentCount + 1;
+            if ($candidateNum < 1) {
+                $candidateNum = 1;
+            }
+
+            // 2. Fetch all existing unique IDs with this prefix from both workers and users
+            $stmt = $pdo->prepare("
+                SELECT unique_id FROM workers WHERE unique_id LIKE :p1
+                UNION
+                SELECT username AS unique_id FROM users WHERE username LIKE :p2
+            ");
+            $stmt->execute([':p1' => $prefix . '%', ':p2' => $prefix . '%']);
+            $existingIds = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+            $usedNumbers = [];
+            foreach ($existingIds as $eid) {
+                if (preg_match('/^' . preg_quote($prefix, '/') . '[-_]?(\d+)$/i', trim($eid), $m)) {
+                    $usedNumbers[(int)$m[1]] = true;
+                }
+            }
+
+            while (isset($usedNumbers[$candidateNum])) {
+                $candidateNum++;
+            }
+
+            return $prefix . '-' . $candidateNum;
+        }
+    }
+
     switch ($action) {
 
         // ==========================================
@@ -281,7 +336,7 @@ try {
                 exit;
             }
 
-            // Auto-generate Unique ID based on Production Unit: PU001-1, PU002-1, PU003-1...
+            // Auto-generate Unique ID based on Production Unit
             $prefix = 'PU001';
             $uStmt = $pdo->prepare("SELECT unit_code FROM production_units WHERE unit_name = :unit OR unit_title = :unit LIMIT 1");
             $uStmt->execute([':unit' => $unit]);
@@ -308,20 +363,7 @@ try {
             }
 
             if ($needsRegen) {
-                $stmt = $pdo->prepare("SELECT unique_id FROM workers WHERE unit = :unit OR unique_id LIKE :prefix_like");
-                $stmt->execute([':unit' => $unit, ':prefix_like' => $prefix . '%']);
-                $allIds = $stmt->fetchAll(PDO::FETCH_COLUMN);
-
-                $maxNum = 0;
-                foreach ($allIds as $existingId) {
-                    if (preg_match('/^' . preg_quote($prefix, '/') . '[-_]?(\d+)$/i', trim($existingId), $m)) {
-                        $num = (int)$m[1];
-                        if ($num > $maxNum) {
-                            $maxNum = $num;
-                        }
-                    }
-                }
-                $unique_id = $prefix . '-' . ($maxNum + 1);
+                $unique_id = getNextWorkerId($pdo, $unit);
             }
 
             // Check for duplicate unique_id in workers
@@ -385,46 +427,37 @@ try {
                 ]);
             }
 
+            // Fetch updated live counts for UI ticker & badges
+            $totalWorkersCount = (int)$pdo->query("SELECT COUNT(*) FROM workers")->fetchColumn();
+            $unitCounts = [];
+            $puStmt = $pdo->query("
+                SELECT unit_name, (SELECT COUNT(*) FROM workers WHERE unit = pu.unit_name OR unit = pu.unit_title) as cnt
+                FROM production_units pu
+            ");
+            while ($r = $puStmt->fetch(PDO::FETCH_ASSOC)) {
+                $unitCounts[$r['unit_name']] = (int)$r['cnt'];
+            }
+
             echo json_encode([
                 'success' => true,
                 'message' => "Worker '$name' ($unique_id) registered successfully! Login credentials & role ($system_role) active.",
                 'worker_id' => $newId,
                 'unique_id' => $unique_id,
-                'system_role' => $system_role
+                'system_role' => $system_role,
+                'counts' => [
+                    'total' => $totalWorkersCount,
+                    'units' => $unitCounts
+                ]
             ]);
             break;
 
         case 'get_next_worker_id':
             $unit = trim($requestData['unit'] ?? 'Unit 1');
-            $prefix = 'PU001';
-            $uStmt = $pdo->prepare("SELECT unit_code FROM production_units WHERE unit_name = :unit OR unit_title = :unit LIMIT 1");
-            $uStmt->execute([':unit' => $unit]);
-            $foundCode = $uStmt->fetchColumn();
-            if ($foundCode) {
-                $prefix = strtoupper(trim($foundCode));
-            } elseif (preg_match('/(\d+)/', $unit, $m)) {
-                $prefix = 'PU' . sprintf('%03d', (int)$m[1]);
-            }
-
-            $stmt = $pdo->prepare("SELECT unique_id FROM workers WHERE unit = :unit OR unique_id LIKE :prefix_like");
-            $stmt->execute([':unit' => $unit, ':prefix_like' => $prefix . '%']);
-            $allIds = $stmt->fetchAll(PDO::FETCH_COLUMN);
-
-            $maxNum = 0;
-            foreach ($allIds as $existingId) {
-                if (preg_match('/^' . preg_quote($prefix, '/') . '[-_]?(\d+)$/i', trim($existingId), $m)) {
-                    $num = (int)$m[1];
-                    if ($num > $maxNum) {
-                        $maxNum = $num;
-                    }
-                }
-            }
-            $nextId = $prefix . '-' . ($maxNum + 1);
+            $nextId = getNextWorkerId($pdo, $unit);
             echo json_encode([
                 'success' => true,
                 'next_id' => $nextId,
-                'unit' => $unit,
-                'prefix' => $prefix
+                'unit' => $unit
             ]);
             break;
 

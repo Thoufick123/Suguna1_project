@@ -1618,11 +1618,6 @@ body.theme-light .quick-dock-item {
     </div>
 
     <div class="dash-header-actions">
-        <!-- Direct Action: Log Today's Clothes -->
-        <a href="daily_output.php" class="btn-action-primary" title="Go to Workstation to log output">
-            <i class="fa-solid fa-plus-circle"></i>
-            <span>Log Output</span>
-        </a>
 
         <!-- Export CSV Button -->
         <a href="<?= htmlspecialchars($exportUrl) ?>" class="btn-action-success" title="Download Complete Production History for this Period as CSV / Excel">

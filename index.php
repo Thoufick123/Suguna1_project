@@ -24,7 +24,7 @@ $unit2Count = $pdo->query("SELECT COUNT(*) FROM workers WHERE unit = 'Unit 2'")-
 $productionUnits = $pdo->query("
     SELECT 
         pu.*,
-        (SELECT COUNT(*) FROM workers WHERE unit = pu.unit_name) as worker_count
+        (SELECT COUNT(*) FROM workers WHERE unit = pu.unit_name OR unit = pu.unit_title) as worker_count
     FROM production_units pu 
     ORDER BY pu.id ASC
 ")->fetchAll(PDO::FETCH_ASSOC);
@@ -62,31 +62,60 @@ if (empty($allSystemRoles)) {
     ];
 }
 
-// Calculate next sequential worker ID for any unit dynamically
-function getNextWorkerId($pdo, $unit) {
-    $prefix = 'PU001';
-    $uStmt = $pdo->prepare("SELECT unit_code FROM production_units WHERE unit_name = :unit OR unit_title = :unit LIMIT 1");
-    $uStmt->execute([':unit' => $unit]);
-    $foundCode = $uStmt->fetchColumn();
-    if ($foundCode) {
-        $prefix = strtoupper(trim($foundCode));
-    } elseif (preg_match('/(\d+)/', $unit, $m)) {
-        $prefix = 'PU' . sprintf('%03d', (int)$m[1]);
-    }
+// Calculate next sequential worker ID for any unit dynamically (gap-filling sequential count)
+if (!function_exists('getNextWorkerId')) {
+    function getNextWorkerId($pdo, $unit) {
+        $prefix = 'PU001';
+        $unitName = $unit;
+        $unitTitle = $unit;
 
-    $stmt = $pdo->prepare("SELECT unique_id FROM workers WHERE unit = :unit OR unique_id LIKE :prefix_like");
-    $stmt->execute([':unit' => $unit, ':prefix_like' => $prefix . '%']);
-    $allIds = $stmt->fetchAll(PDO::FETCH_COLUMN);
-    $maxNum = 0;
-    foreach ($allIds as $existingId) {
-        if (preg_match('/^' . preg_quote($prefix, '/') . '[-_]?(\d+)$/i', trim($existingId), $m)) {
-            $num = (int)$m[1];
-            if ($num > $maxNum) {
-                $maxNum = $num;
+        $uStmt = $pdo->prepare("SELECT unit_name, unit_title, unit_code FROM production_units WHERE unit_name = :unit OR unit_title = :unit OR unit_code = :unit LIMIT 1");
+        $uStmt->execute([':unit' => $unit]);
+        $uRow = $uStmt->fetch(PDO::FETCH_ASSOC);
+        if ($uRow) {
+            $unitName = $uRow['unit_name'];
+            $unitTitle = $uRow['unit_title'];
+            if (!empty($uRow['unit_code'])) {
+                $prefix = strtoupper(trim($uRow['unit_code']));
+            }
+        } elseif (preg_match('/(\d+)/', $unit, $m)) {
+            $prefix = 'PU' . sprintf('%03d', (int)$m[1]);
+            $unitName = 'Unit ' . (int)$m[1];
+        }
+
+        // 1. Count active workers currently assigned to this unit
+        $cStmt = $pdo->prepare("SELECT COUNT(*) FROM workers WHERE unit = :u1 OR unit = :u2");
+        $cStmt->execute([':u1' => $unitName, ':u2' => $unitTitle]);
+        $currentCount = (int)$cStmt->fetchColumn();
+
+        // Sequential ID corresponding to (current count + 1)-th worker
+        $candidateNum = $currentCount + 1;
+        if ($candidateNum < 1) {
+            $candidateNum = 1;
+        }
+
+        // 2. Fetch all existing unique IDs with this prefix from both workers and users
+        $stmt = $pdo->prepare("
+            SELECT unique_id FROM workers WHERE unique_id LIKE :p1
+            UNION
+            SELECT username AS unique_id FROM users WHERE username LIKE :p2
+        ");
+        $stmt->execute([':p1' => $prefix . '%', ':p2' => $prefix . '%']);
+        $existingIds = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+        $usedNumbers = [];
+        foreach ($existingIds as $eid) {
+            if (preg_match('/^' . preg_quote($prefix, '/') . '[-_]?(\d+)$/i', trim($eid), $m)) {
+                $usedNumbers[(int)$m[1]] = true;
             }
         }
+
+        while (isset($usedNumbers[$candidateNum])) {
+            $candidateNum++;
+        }
+
+        return $prefix . '-' . $candidateNum;
     }
-    return $prefix . '-' . ($maxNum + 1);
 }
 
 $initialUniqueId = getNextWorkerId($pdo, $preselectedUnit);
@@ -119,7 +148,7 @@ include __DIR__ . '/includes/header.php';
         </div>
         <div class="stat-info">
             <div class="stat-label">Total Registered Workers</div>
-            <div class="stat-value"><?= number_format($totalWorkers) ?></div>
+            <div class="stat-value" id="statTotalWorkers"><?= number_format($totalWorkers) ?></div>
             <div class="stat-sub">Across All Units</div>
         </div>
     </div>
@@ -140,7 +169,7 @@ include __DIR__ . '/includes/header.php';
                     <span class="badge-pill" style="font-size: 0.65rem; background: rgba(244,63,94,0.15); color: #f43f5e; padding: 0.05rem 0.35rem;">Disabled</span>
                 <?php endif; ?>
             </div>
-            <div class="stat-value" style="color: var(--accent-<?= htmlspecialchars($uColor) ?>, #06b6d4);"><?= number_format((int)$pu['worker_count']) ?></div>
+            <div class="stat-value" id="statUnitCount_<?= htmlspecialchars(preg_replace('/[^a-zA-Z0-9]/', '_', $pu['unit_name'])) ?>" data-unit-stat="<?= htmlspecialchars($pu['unit_name']) ?>" data-unit-title="<?= htmlspecialchars($pu['unit_title']) ?>" style="color: var(--accent-<?= htmlspecialchars($uColor) ?>, #06b6d4);"><?= number_format((int)$pu['worker_count']) ?></div>
             <div class="card-click-hint" style="color: var(--accent-<?= htmlspecialchars($uColor) ?>, #06b6d4);">
                 <span>View Registered Workers</span> <i class="fa-solid fa-arrow-right"></i>
             </div>
@@ -224,8 +253,7 @@ include __DIR__ . '/includes/header.php';
                                         <?php if ($isDis): ?>
                                             <span class="badge-pill" style="font-size: 0.68rem; background: rgba(244,63,94,0.2); color: #f43f5e; border: 1px solid rgba(244,63,94,0.3); margin-left: 0.35rem;">(Disabled)</span>
                                         <?php endif; ?>
-                                    </span>
-                                    <span class="badge-pill unit-<?= htmlspecialchars($uColor) ?>-pill"><?= number_format((int)$pu['worker_count']) ?> Workers</span>
+                                    <span class="badge-pill unit-<?= htmlspecialchars($uColor) ?>-pill" id="badgeUnitCount_<?= htmlspecialchars(preg_replace('/[^a-zA-Z0-9]/', '_', $pu['unit_name'])) ?>" data-unit-badge="<?= htmlspecialchars($pu['unit_name']) ?>" data-unit-title="<?= htmlspecialchars($pu['unit_title']) ?>"><?= number_format((int)$pu['worker_count']) ?> Workers</span>
                                 </div>
                                 <span class="unit-card-desc"><?= htmlspecialchars($pu['description']) ?></span>
                             </div>

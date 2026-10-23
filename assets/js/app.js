@@ -433,6 +433,27 @@ function initRegistrationForm() {
 
             if (data.success) {
                 showToast(data.message, 'success', 5000);
+
+                // Update live counters immediately across top cards and radio badges
+                if (data.counts) {
+                    if (data.counts.total !== undefined) {
+                        const totalEl = document.getElementById('statTotalWorkers');
+                        if (totalEl) totalEl.textContent = Number(data.counts.total).toLocaleString();
+                    }
+                    if (data.counts.units && typeof data.counts.units === 'object') {
+                        Object.keys(data.counts.units).forEach(uName => {
+                            const uCnt = Number(data.counts.units[uName]);
+                            // Update top stat cards
+                            document.querySelectorAll(`[data-unit-stat="${uName}"]`).forEach(el => {
+                                el.textContent = uCnt.toLocaleString();
+                            });
+                            // Update unit card radio badges
+                            document.querySelectorAll(`[data-unit-badge="${uName}"]`).forEach(el => {
+                                el.textContent = `${uCnt.toLocaleString()} Workers`;
+                            });
+                        });
+                    }
+                }
                 
                 // Show action dialog or redirect option
                 const actionBox = document.getElementById('registrationSuccessBox');
@@ -447,7 +468,15 @@ function initRegistrationForm() {
                         roleEl.innerText = sRole.charAt(0).toUpperCase() + sRole.slice(1);
                     }
                     document.getElementById('quickLogLink').href = `daily_output.php?worker_id=${data.worker_id}`;
+
+                    const registeredUnit = formData.get('unit');
                     form.reset();
+                    if (registeredUnit) {
+                        const radioToKeep = form.querySelector(`input[name="unit"][value="${registeredUnit}"]`);
+                        if (radioToKeep) {
+                            radioToKeep.checked = true;
+                        }
+                    }
                     isMobileDuplicate = false;
                     if (mobileFeedback) mobileFeedback.style.display = 'none';
                     if (mobileInput) {
