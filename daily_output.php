@@ -89,6 +89,11 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv' && $worker) {
     $periodLabel = "All Time (Whole History)";
 
     if (!empty($startDate) && !empty($endDate)) {
+        if ($startDate > $endDate) {
+            $temp = $startDate;
+            $startDate = $endDate;
+            $endDate = $temp;
+        }
         $dateConditions = " AND pl.work_date >= :start_date AND pl.work_date <= :end_date ";
         $params[':start_date'] = $startDate;
         $params[':end_date']   = $endDate;
@@ -1528,9 +1533,6 @@ function filterWorkersByUnit(unitName) {
 </div>
 
 <?php endif; ?>
-
-<!-- 6. UNIT 1 & UNIT 2 CATEGORY PRODUCTION LEADERBOARDS SLIDER -->
-<?php include __DIR__ . '/includes/unit_category_slider.php'; ?>
 
 <script>
 // Client-side controller for Dedicated User Stitching Workstation
@@ -3306,19 +3308,26 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
             </div>
 
-            <!-- Custom Start Date & End Date Inputs -->
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; background: rgba(255, 255, 255, 0.02); padding: 0.85rem; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
-                <div>
-                    <label for="exportStartDate" style="display: block; font-size: 0.78rem; font-weight: 600; margin-bottom: 0.35rem; color: var(--text-secondary);">
-                        <i class="fa-regular fa-calendar text-cyan"></i> Start Date:
-                    </label>
-                    <input type="date" id="exportStartDate" name="start_date" class="form-control" style="font-size: 0.85rem; padding: 0.45rem 0.65rem;">
+            <!-- Custom Start Date & End Date Inputs with Interactive Validation -->
+            <div style="background: rgba(255, 255, 255, 0.02); padding: 0.85rem; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+                    <div>
+                        <label for="exportStartDate" style="display: block; font-size: 0.78rem; font-weight: 600; margin-bottom: 0.35rem; color: var(--text-secondary);">
+                            <i class="fa-regular fa-calendar text-cyan"></i> Start Date:
+                        </label>
+                        <input type="date" id="exportStartDate" name="start_date" class="form-control" style="font-size: 0.85rem; padding: 0.45rem 0.65rem;" onchange="validateExportDateRange('start')" oninput="validateExportDateRange('start')">
+                    </div>
+                    <div>
+                        <label for="exportEndDate" style="display: block; font-size: 0.78rem; font-weight: 600; margin-bottom: 0.35rem; color: var(--text-secondary);">
+                            <i class="fa-regular fa-calendar text-cyan"></i> End Date:
+                        </label>
+                        <input type="date" id="exportEndDate" name="end_date" class="form-control" style="font-size: 0.85rem; padding: 0.45rem 0.65rem;" onchange="validateExportDateRange('end')" oninput="validateExportDateRange('end')">
+                    </div>
                 </div>
-                <div>
-                    <label for="exportEndDate" style="display: block; font-size: 0.78rem; font-weight: 600; margin-bottom: 0.35rem; color: var(--text-secondary);">
-                        <i class="fa-regular fa-calendar text-cyan"></i> End Date:
-                    </label>
-                    <input type="date" id="exportEndDate" name="end_date" class="form-control" style="font-size: 0.85rem; padding: 0.45rem 0.65rem;">
+                <!-- Validation Error Message -->
+                <div id="exportDateRangeError" style="display: none; color: #fb7185; background: rgba(244, 63, 94, 0.12); border: 1px solid rgba(244, 63, 94, 0.35); border-radius: 6px; padding: 0.45rem 0.75rem; font-size: 0.76rem; font-weight: 600; margin-top: 0.6rem; align-items: center; gap: 0.45rem;">
+                    <i class="fa-solid fa-triangle-exclamation"></i>
+                    <span id="exportDateRangeErrorMsg">Start Date cannot be later than End Date.</span>
                 </div>
             </div>
 
@@ -3332,7 +3341,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             <div style="display: flex; gap: 0.6rem; justify-content: flex-end; margin-top: 0.25rem;">
                 <button type="button" class="btn btn-outline btn-sm" onclick="closeDownloadHistoryModal()">Cancel</button>
-                <button type="submit" class="btn btn-primary btn-sm" style="background: linear-gradient(135deg, #10b981, #059669); border: none; font-weight: 700; display: inline-flex; align-items: center; gap: 0.45rem; padding: 0.55rem 1.15rem; box-shadow: 0 4px 12px rgba(16,185,129,0.3);">
+                <button type="submit" id="downloadCsvSubmitBtn" class="btn btn-primary btn-sm" style="background: linear-gradient(135deg, #10b981, #059669); border: none; font-weight: 700; display: inline-flex; align-items: center; gap: 0.45rem; padding: 0.55rem 1.15rem; box-shadow: 0 4px 12px rgba(16,185,129,0.3);">
                     <i class="fa-solid fa-file-arrow-down"></i> Download CSV History
                 </button>
             </div>
@@ -3353,6 +3362,78 @@ function closeDownloadHistoryModal() {
     const modal = document.getElementById('downloadHistoryModal');
     if (modal) {
         modal.style.display = 'none';
+    }
+}
+
+function validateExportDateRange(changedField) {
+    const startInput = document.getElementById('exportStartDate');
+    const endInput = document.getElementById('exportEndDate');
+    const errorBox = document.getElementById('exportDateRangeError');
+    const errorMsg = document.getElementById('exportDateRangeErrorMsg');
+    const submitBtn = document.getElementById('downloadCsvSubmitBtn');
+    if (!startInput || !endInput) return true;
+
+    const sVal = startInput.value;
+    const eVal = endInput.value;
+
+    // Clear preset pill highlight if user manually altered custom dates
+    if (changedField) {
+        document.querySelectorAll('.preset-btn').forEach(btn => {
+            btn.classList.remove('btn-primary');
+            btn.classList.add('btn-outline');
+        });
+    }
+
+    // Dynamic constraints
+    if (sVal) {
+        endInput.min = sVal;
+    } else {
+        endInput.removeAttribute('min');
+    }
+
+    if (eVal) {
+        startInput.max = eVal;
+    } else {
+        startInput.removeAttribute('max');
+    }
+
+    // Validate chronological order
+    if (sVal && eVal && sVal > eVal) {
+        if (changedField === 'start') {
+            // Auto-align End Date to match Start Date so invalid ranges are prevented instantly!
+            endInput.value = sVal;
+            endInput.min = sVal;
+            if (errorBox) errorBox.style.display = 'none';
+            startInput.style.borderColor = '';
+            endInput.style.borderColor = '';
+            if (submitBtn) submitBtn.disabled = false;
+            return true;
+        } else if (changedField === 'end') {
+            // Auto-align Start Date to match End Date
+            startInput.value = eVal;
+            startInput.max = eVal;
+            if (errorBox) errorBox.style.display = 'none';
+            startInput.style.borderColor = '';
+            endInput.style.borderColor = '';
+            if (submitBtn) submitBtn.disabled = false;
+            return true;
+        } else {
+            // Mismatch
+            if (errorBox) {
+                errorBox.style.display = 'flex';
+                if (errorMsg) errorMsg.textContent = `Invalid Range: Start Date (${sVal}) cannot be later than End Date (${eVal}).`;
+            }
+            startInput.style.borderColor = '#f43f5e';
+            endInput.style.borderColor = '#f43f5e';
+            if (submitBtn) submitBtn.disabled = true;
+            return false;
+        }
+    } else {
+        if (errorBox) errorBox.style.display = 'none';
+        startInput.style.borderColor = '';
+        endInput.style.borderColor = '';
+        if (submitBtn) submitBtn.disabled = false;
+        return true;
     }
 }
 
@@ -3383,6 +3464,8 @@ function setExportPreset(preset) {
         endInput.value = '';
     }
 
+    validateExportDateRange(null);
+
     // Highlight active preset button
     document.querySelectorAll('.preset-btn').forEach(btn => {
         btn.classList.remove('btn-primary');
@@ -3400,6 +3483,22 @@ function setExportPreset(preset) {
         activeBtn.classList.add('btn-primary');
     }
 }
+
+// Attach Form Submit Protection
+document.addEventListener('DOMContentLoaded', () => {
+    const dlForm = document.getElementById('downloadHistoryForm');
+    if (dlForm) {
+        dlForm.addEventListener('submit', function(e) {
+            const startInput = document.getElementById('exportStartDate');
+            const endInput = document.getElementById('exportEndDate');
+            if (startInput && endInput && startInput.value && endInput.value && startInput.value > endInput.value) {
+                e.preventDefault();
+                validateExportDateRange('check');
+                return false;
+            }
+        });
+    }
+});
 
 // Close modal when clicking outside
 window.addEventListener('click', function(e) {
