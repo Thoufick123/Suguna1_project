@@ -460,8 +460,9 @@ try {
                 exit;
             }
 
-            if ($piece_count <= 0) {
-                echo json_encode(['success' => false, 'message' => 'Piece count must be greater than 0.']);
+            $mode = trim($requestData['mode'] ?? 'set_total');
+            if ($piece_count < 0 || ($piece_count == 0 && $mode !== 'set_total')) {
+                echo json_encode(['success' => false, 'message' => 'Piece count must be 0 or greater.']);
                 exit;
             }
 
@@ -493,28 +494,22 @@ try {
 
             $currentUnit = !empty($requestData['unit']) ? trim($requestData['unit']) : (!empty($worker['unit']) ? $worker['unit'] : 'Unit 1');
 
-            // Check if an entry already exists for this worker, CURRENT UNIT, date, material, and shift
+            // Find existing entry for this worker, date, and material
             $existStmt = $pdo->prepare("
                 SELECT id, piece_count, notes, unit 
                 FROM piece_logs 
                 WHERE worker_id = :worker_id 
-                  AND (unit = :unit OR (unit IS NULL AND :unit_fallback = 'Unit 1'))
                   AND work_date = :work_date 
                   AND LOWER(TRIM(material_name)) = LOWER(TRIM(:material_name))
-                  AND shift = :shift 
                 ORDER BY id DESC LIMIT 1
             ");
             $existStmt->execute([
                 ':worker_id' => $worker_id,
-                ':unit' => $currentUnit,
-                ':unit_fallback' => $currentUnit,
                 ':work_date' => $work_date,
-                ':material_name' => $material_name,
-                ':shift' => $shift
+                ':material_name' => $material_name
             ]);
             $existingLog = $existStmt->fetch();
 
-            $mode = trim($requestData['mode'] ?? 'set_total');
             $prevCount = 0;
             $newCount = $piece_count;
             $added = $piece_count;
@@ -532,23 +527,36 @@ try {
                     $added = $piece_count;
                 }
 
-                $combinedNotes = $existingLog['notes'] ?? '';
-                if (!empty($notes) && strpos($combinedNotes, $notes) === false) {
-                    $combinedNotes = !empty($combinedNotes) ? ($combinedNotes . ' | ' . $notes) : $notes;
+                if ($newCount <= 0) {
+                    $pdo->prepare("DELETE FROM piece_logs WHERE id = :id")->execute([':id' => $logId]);
+                    $newCount = 0;
+                } else {
+                    $upStmt = $pdo->prepare("
+                        UPDATE piece_logs 
+                        SET piece_count = :piece_count, unit = :unit, created_at = CURRENT_TIMESTAMP 
+                        WHERE id = :id
+                    ");
+                    $upStmt->execute([
+                        ':piece_count' => $newCount,
+                        ':unit' => $currentUnit,
+                        ':id' => $logId
+                    ]);
                 }
 
-                $upStmt = $pdo->prepare("
-                    UPDATE piece_logs 
-                    SET piece_count = :piece_count, notes = :notes, unit = :unit, created_at = CURRENT_TIMESTAMP 
-                    WHERE id = :id
-                ");
-                $upStmt->execute([
-                    ':piece_count' => $newCount,
-                    ':notes' => $combinedNotes,
-                    ':unit' => $currentUnit,
-                    ':id' => $logId
+                // Clean up any remaining duplicate rows for this worker, date, and material
+                $pdo->prepare("
+                    DELETE FROM piece_logs 
+                    WHERE worker_id = :worker_id 
+                      AND work_date = :work_date 
+                      AND LOWER(TRIM(material_name)) = LOWER(TRIM(:material_name))
+                      AND id != :keep_id
+                ")->execute([
+                    ':worker_id' => $worker_id,
+                    ':work_date' => $work_date,
+                    ':material_name' => $material_name,
+                    ':keep_id' => $logId
                 ]);
-            } else {
+            } elseif ($newCount > 0) {
                 $logStmt = $pdo->prepare("
                     INSERT INTO piece_logs (worker_id, unit, material_name, piece_count, work_date, shift, notes)
                     VALUES (:worker_id, :unit, :material_name, :piece_count, :work_date, :shift, :notes)
@@ -558,9 +566,9 @@ try {
                     ':worker_id' => $worker_id,
                     ':unit' => $currentUnit,
                     ':material_name' => $material_name,
-                    ':piece_count' => $piece_count,
+                    ':piece_count' => $newCount,
                     ':work_date' => $work_date,
-                    ':shift' => $shift,
+                    ':shift' => !empty($shift) ? $shift : 'Day Shift',
                     ':notes' => $notes
                 ]);
                 $logId = (int)$pdo->lastInsertId();

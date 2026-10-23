@@ -290,13 +290,11 @@ foreach ($workerUnitTotals as $ut) {
     }
 }
 
-// Build a lookup map of material_name -> current_count for today (summing across shifts & entries for 12:00 AM - 11:59 PM)
+// Build a lookup map of material_name -> current_count for today (summing across today's entries for 12:00 AM - 11:59 PM)
 $todayMaterialCounts = [];
 foreach ($todayLogs as $l) {
     $matKey = strtolower(trim($l['material_name']));
-    $shiftKey = strtolower(trim($l['shift']));
     $c = (int)$l['piece_count'];
-    $todayMaterialCounts[$matKey . '|' . $shiftKey] = ($todayMaterialCounts[$matKey . '|' . $shiftKey] ?? 0) + $c;
     $todayMaterialCounts[$matKey] = ($todayMaterialCounts[$matKey] ?? 0) + $c;
 }
 
@@ -1082,11 +1080,6 @@ function filterWorkersByUnit(unitName) {
             <button type="button" class="btn btn-outline btn-sm" onclick="openDownloadHistoryModal()" style="padding: 0.28rem 0.65rem; font-size: 0.78rem; border-color: rgba(16,185,129,0.45); color: #34d399; background: rgba(16,185,129,0.08); font-weight: 700; display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer;" title="Download stitching history month-wise or by date range">
                 <i class="fa-solid fa-file-arrow-down"></i> Download History
             </button>
-
-            <!-- Leaderboard Quick Link -->
-            <a href="leaderboard.php" class="btn btn-outline btn-sm" style="padding: 0.28rem 0.65rem; font-size: 0.78rem; border-color: rgba(245,158,11,0.4); color: #fbbf24;">
-                <i class="fa-solid fa-trophy"></i> Leaderboard
-            </a>
         </div>
     </div>
 
@@ -1374,27 +1367,9 @@ function filterWorkersByUnit(unitName) {
             </div>
         </div>
 
-        <!-- STEP 3: Shift & Notes in 1 Compact Row -->
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 1.15rem;">
-            <div>
-                <label for="userShiftSelect" style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted); margin-bottom: 0.25rem; display: block;">
-                    <i class="fa-solid fa-clock"></i> Shift
-                </label>
-                <select id="userShiftSelect" name="shift" class="form-control" style="font-size: 0.85rem; padding: 0.4rem 0.65rem;">
-                    <option value="Day Shift" selected>Day Shift</option>
-                    <option value="Morning Shift">Morning Shift</option>
-                    <option value="Evening Shift">Evening Shift</option>
-                    <option value="Night Shift">Night Shift</option>
-                    <option value="Overtime">Overtime</option>
-                </select>
-            </div>
-            <div>
-                <label for="userNotesInput" style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted); margin-bottom: 0.25rem; display: block;">
-                    <i class="fa-regular fa-comment-dots"></i> Note (Optional)
-                </label>
-                <input type="text" id="userNotesInput" name="notes" class="form-control" placeholder="e.g. Batch #1" style="font-size: 0.85rem; padding: 0.4rem 0.65rem;">
-            </div>
-        </div>
+        <!-- Hidden defaults for shift and notes to keep backend compatibility -->
+        <input type="hidden" id="userShiftSelect" name="shift" value="Day Shift">
+        <input type="hidden" id="userNotesInput" name="notes" value="">
 
         <!-- STEP 4: Complete (+1) Instant Save Button -->
         <div class="uf-submit-row">
@@ -1412,79 +1387,7 @@ function filterWorkersByUnit(unitName) {
     </form>
 </div>
 
-<!-- 2B. Real-Time Category Priority Leaderboard (e.g. Maternity & Garment-wise Ranking) -->
-<div id="clothLeaderboardCard" class="card mb-4" style="display: none; margin-top: 2rem; border-color: rgba(245, 158, 11, 0.35); background: linear-gradient(180deg, rgba(245, 158, 11, 0.04) 0%, rgba(18, 24, 38, 0.95) 100%);">
-    <div class="card-header" style="flex-wrap: wrap; gap: 0.75rem;">
-        <div>
-            <div class="card-title" style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
-                <span class="badge-pill" style="background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;">
-                    <i class="fa-solid fa-trophy"></i> Live Priority Ranking
-                </span>
-                <span id="clothLbHeadingGarment" class="text-amber" style="font-weight: 800; font-size: 1.05rem;">Maternity Category</span>
-                <span id="clothLbUnitBadge" class="badge-pill <?= (($worker['unit'] ?? '') === 'Unit 2') ? 'unit-2' : 'unit-1' ?>" style="font-size: 0.75rem; font-weight: 700;">
-                    <?= htmlspecialchars($worker['unit'] ?? 'Unit 1') ?>
-                </span>
-            </div>
-            <p class="text-muted" style="font-size: 0.82rem; margin-top: 0.25rem;">
-                <?php if ($isUserRole || $isOperator): ?>
-                    Showing your personal stitching output &amp; priority status for today.
-                <?php else: ?>
-                    Showing operators in <strong id="clothLbUnitSubtitle" class="text-cyan"><?= htmlspecialchars($worker['unit'] ?? 'Unit 1') ?></strong> priority-wise (Highest pieces = 1st Place 🥇).
-                <?php endif; ?>
-            </p>
-        </div>
-        <div style="display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap;">
-            <?php if (!$isUserRole && !$isOperator): ?>
-                <!-- Unit Filter Tabs for Priority Leaderboard (Admin only) -->
-                <div id="clothLbUnitTabs" style="display: inline-flex; background: rgba(0, 0, 0, 0.35); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 3px; gap: 3px;">
-                    <?php foreach ($productionUnits as $pu): 
-                        $uName = $pu['unit_name'];
-                        $isCur = ($worker && $worker['unit'] === $uName);
-                        $uColor = ($uName === 'Unit 1') ? 'cyan' : 'pink';
-                    ?>
-                    <button type="button" class="btn btn-xs cloth-lb-unit-btn <?= $isCur ? 'active active-' . $uColor : '' ?>" data-unit="<?= htmlspecialchars($uName) ?>" data-color="<?= $uColor ?>" style="padding: 0.25rem 0.65rem; font-size: 0.75rem; border-radius: var(--radius-sm); font-weight: 700;">
-                        <i class="fa-solid <?= htmlspecialchars($pu['icon'] ?? 'fa-industry') ?>" style="font-size: 0.7rem;"></i> <?= htmlspecialchars($pu['unit_title']) ?>
-                    </button>
-                    <?php endforeach; ?>
-                    <button type="button" class="btn btn-xs cloth-lb-unit-btn" data-unit="All" data-color="emerald" style="padding: 0.25rem 0.65rem; font-size: 0.75rem; border-radius: var(--radius-sm); font-weight: 600; opacity: 0.85;">
-                        <i class="fa-solid fa-layer-group" style="font-size: 0.7rem;"></i> All Units
-                    </button>
-                </div>
-            <?php endif; ?>
 
-            <div id="clothLbActiveBadge" class="badge-pill" style="background: rgba(6, 182, 212, 0.12); color: var(--accent-cyan); border: 1px solid rgba(6, 182, 212, 0.3); font-size: 0.85rem; padding: 0.4rem 0.85rem;">
-                <i class="fa-solid <?= ($isUserRole || $isOperator) ? 'fa-user-check' : 'fa-users' ?>"></i> 
-                <span id="clothLbParticipantsCount"><?= ($isUserRole || $isOperator) ? 'Personal Status' : '0 Operators Ranked' ?></span>
-            </div>
-        </div>
-    </div>
-
-    <!-- Category Micro Podium (Top 3 Priority Performers) -->
-    <div style="padding: 1rem 1.25rem 0.5rem 1.25rem;">
-        <div id="clothLbPodium" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
-            <!-- Dynamically populated via AJAX -->
-        </div>
-    </div>
-
-    <!-- Complete Priority Table for Category -->
-    <div class="table-responsive">
-        <table class="data-table" style="font-size: 0.88rem;">
-            <thead>
-                <tr>
-                    <th style="width: 70px; text-align: center;">Priority</th>
-                    <th>Worker Details</th>
-                    <th>Unit</th>
-                    <th>Role</th>
-                    <th style="text-align: right;">Pieces Stitched</th>
-                    <th style="text-align: center;">Rank &amp; Status</th>
-                </tr>
-            </thead>
-            <tbody id="clothLbTableBody">
-                <!-- Dynamically populated via AJAX -->
-            </tbody>
-        </table>
-    </div>
-</div>
 
 <!-- 3. Daily Output KPI Grid -->
 <div class="stats-grid">
@@ -1693,20 +1596,11 @@ document.addEventListener('DOMContentLoaded', () => {
         cooldownTimerInterval = setInterval(updateTick, 1000);
     }
 
-    // Helper to get today's existing piece count for a selected cloth & shift
-    function getMaterialCurrentCount(matName, shiftName) {
+    // Helper to get today's existing piece count for a selected cloth
+    function getMaterialCurrentCount(matName) {
         if (!matName || !window.todayMaterialCounts) return 0;
         const cleanMat = matName.toLowerCase().trim();
-        const cleanShift = (shiftName || '').toLowerCase().trim();
-        // Check shift specific first if positive
-        if (window.todayMaterialCounts[cleanMat + '|' + cleanShift] !== undefined && window.todayMaterialCounts[cleanMat + '|' + cleanShift] > 0) {
-            return window.todayMaterialCounts[cleanMat + '|' + cleanShift];
-        }
-        // Fallback to overall daily total for this garment across today (12:00 AM - 11:59 PM)
-        if (window.todayMaterialCounts[cleanMat] !== undefined) {
-            return window.todayMaterialCounts[cleanMat];
-        }
-        return 0;
+        return parseInt(window.todayMaterialCounts[cleanMat]) || 0;
     }
 
     const currentWorkerId = <?= (int)($worker['id'] ?? 0) ?>;
@@ -1716,32 +1610,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Fetch and render dynamic Priority Leaderboard for selected category (e.g. Maternity)
     async function fetchClothLeaderboard(materialName, targetUnit = null) {
-        const card = document.getElementById('clothLeaderboardCard');
-        const headingGarment = document.getElementById('clothLbHeadingGarment');
-        const unitBadge = document.getElementById('clothLbUnitBadge');
-        const unitSubtitle = document.getElementById('clothLbUnitSubtitle');
-        const participantsCount = document.getElementById('clothLbParticipantsCount');
-        const podiumContainer = document.getElementById('clothLbPodium');
-        const tableBody = document.getElementById('clothLbTableBody');
-        
-        if (targetUnit !== null) {
-            currentClothLbUnit = targetUnit;
-        }
-
-        if (!materialName || materialName === '__custom__') {
-            if (card) card.style.display = 'none';
-            return;
-        }
-
-        lastFetchedClothMaterial = materialName;
-
-        if (card) card.style.display = 'block';
-        if (headingGarment) {
-            const isMaternity = materialName.toLowerCase().includes('maternity');
-            const isOpUser = Boolean(window.isOperator || window.isUserRole);
-            const titleSuffix = isOpUser ? ' Stitched Status' : ' Priority Ranking';
-            headingGarment.innerHTML = (isMaternity ? '🤰 ' : '👕 ') + escapeHtml(materialName) + titleSuffix;
-        }
+        return;
+    }
+    async function _disabled_fetchClothLeaderboard(materialName, targetUnit = null) {
 
         if (unitBadge) {
             if (currentClothLbUnit && currentClothLbUnit !== 'All') {
@@ -2019,9 +1890,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             const selectedMat = clothSelect.value.trim();
-            const currentShift = userShiftSelect ? userShiftSelect.value : 'Day Shift';
             if (selectedMat && selectedMat !== '__custom__') {
-                const existingCount = getMaterialCurrentCount(selectedMat, currentShift);
+                const existingCount = getMaterialCurrentCount(selectedMat);
                 
                 if (clothStatusBadge) clothStatusBadge.style.display = 'flex';
                 if (clothCurrentLoggedCount) clothCurrentLoggedCount.innerText = existingCount + ' pcs';
@@ -2031,7 +1901,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 updateBtn();
-                fetchClothLeaderboard(selectedMat);
             } else {
                 if (clothStatusBadge) clothStatusBadge.style.display = 'none';
                 updateBtn();
@@ -2113,9 +1982,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (breadcrumbBox) breadcrumbBox.style.display = 'flex';
 
-        // 5. Load today's count for this garment & shift
-        const currentShift = userShiftSelect ? userShiftSelect.value : 'Day Shift';
-        const existingCount = getMaterialCurrentCount(matName, currentShift);
+        // 5. Load today's count for this garment
+        const existingCount = getMaterialCurrentCount(matName);
         if (pieceInput) {
             pieceInput.value = existingCount;
         }
@@ -2127,7 +1995,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         updateBtn();
-        fetchClothLeaderboard(matName);
 
         // Store active garment selection in localStorage to persist across refreshes / logins
         try {
@@ -2203,27 +2070,37 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        const currentShift = userShiftSelect ? userShiftSelect.value : 'Day Shift';
-        const existingCount = parseInt(getMaterialCurrentCount(selectedMat, currentShift)) || 0;
+        const existingCount = parseInt(getMaterialCurrentCount(selectedMat)) || 0;
         const currentInBox = parseInt(pieceInput ? pieceInput.value : 0) || 0;
 
-        // Complete button state
+        // Complete / Save button state
         if (completeBtn) {
             completeBtn.disabled = false;
             completeBtn.style.opacity = '1';
             completeBtn.style.cursor = 'pointer';
             completeBtn.classList.add('btn-ready-pulse');
-            const diff = (currentInBox > existingCount) ? (currentInBox - existingCount) : 1;
-            if (completeBtnLabel) {
-                completeBtnLabel.innerText = (diff > 1) ? `Complete (+${diff})` : 'Complete (+1)';
+            
+            if (currentInBox < existingCount) {
+                if (completeBtnLabel) completeBtnLabel.innerText = `Save Count (${currentInBox})`;
+                if (completeBtnIcon) completeBtnIcon.className = 'fa-solid fa-floppy-disk';
+            } else if (currentInBox > existingCount) {
+                const diff = currentInBox - existingCount;
+                if (completeBtnLabel) completeBtnLabel.innerText = (diff > 1) ? `Complete (+${diff})` : 'Complete (+1)';
+                if (completeBtnIcon) completeBtnIcon.className = 'fa-solid fa-circle-check';
+            } else {
+                if (completeBtnLabel) completeBtnLabel.innerText = 'Complete (+1)';
+                if (completeBtnIcon) completeBtnIcon.className = 'fa-solid fa-circle-check';
             }
         }
 
         if (stepperHint) {
             const dateTxt = window.isCurrentDateToday ? "today" : "on " + (window.currentSelectedDate || "this date");
-            if (currentInBox > existingCount) {
+            if (currentInBox < existingCount) {
+                const diff = existingCount - currentInBox;
+                stepperHint.innerHTML = `Saved in DB (${dateTxt}): <strong class="text-emerald">${existingCount} pcs</strong> • Decreasing to: <strong class="text-rose">${currentInBox} pcs</strong> (Click Save Count).`;
+            } else if (currentInBox > existingCount) {
                 const diff = currentInBox - existingCount;
-                stepperHint.innerHTML = `Saved in DB: <strong class="text-muted">${existingCount} pcs</strong> • Ready to Add: <strong class="text-cyan">+${diff} pcs</strong> (Click Complete).`;
+                stepperHint.innerHTML = `Saved in DB (${dateTxt}): <strong class="text-muted">${existingCount} pcs</strong> • Ready to Add: <strong class="text-cyan">+${diff} pcs</strong> (Click Complete).`;
             } else if (existingCount > 0) {
                 stepperHint.innerHTML = `Saved in DB (${dateTxt}): <strong class="text-emerald">${existingCount} pcs</strong>. Click Complete (+1) after stitching.`;
             } else {
@@ -2266,8 +2143,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (resetFormBtn && pieceInput) {
         resetFormBtn.addEventListener('click', () => {
             let selectedMat = clothSelect ? clothSelect.value.trim() : '';
-            const currentShift = userShiftSelect ? userShiftSelect.value : 'Day Shift';
-            pieceInput.value = getMaterialCurrentCount(selectedMat, currentShift);
+            pieceInput.value = getMaterialCurrentCount(selectedMat);
             updateBtn();
         });
     }
@@ -2275,20 +2151,28 @@ document.addEventListener('DOMContentLoaded', () => {
     // Helper function to update all workstation and lifetime UI counters on save success
     function applyLoggedPieceSuccess(data, materialVal, shiftVal, notesVal) {
         const cleanMat = materialVal.toLowerCase().trim();
-        const cleanShift = shiftVal.toLowerCase().trim();
         if (!window.todayMaterialCounts) window.todayMaterialCounts = {};
-        window.todayMaterialCounts[cleanMat + '|' + cleanShift] = data.current_material_count;
-        window.todayMaterialCounts[cleanMat] = data.current_material_count;
+        const newCount = parseInt(data.current_material_count) || 0;
+        window.todayMaterialCounts[cleanMat] = newCount;
 
         // Update live count badge on the corresponding garment chip
         const cleanBadgeId = 'chipBadge_' + cleanMat.replace(/[^a-z0-9_]/g, '');
         const chipBadgeEl = document.getElementById(cleanBadgeId);
         if (chipBadgeEl) {
-            chipBadgeEl.innerText = data.current_material_count + ' pcs';
-            chipBadgeEl.style.background = 'rgba(16,185,129,0.22)';
-            chipBadgeEl.style.color = '#10b981';
-            chipBadgeEl.style.border = '1px solid rgba(16,185,129,0.45)';
+            chipBadgeEl.innerText = newCount + ' pcs';
+            chipBadgeEl.style.background = newCount > 0 ? 'rgba(16,185,129,0.22)' : 'rgba(255,255,255,0.06)';
+            chipBadgeEl.style.color = newCount > 0 ? '#10b981' : 'var(--text-muted)';
+            chipBadgeEl.style.border = newCount > 0 ? '1px solid rgba(16,185,129,0.45)' : '1px solid rgba(255,255,255,0.08)';
         }
+
+        // Sync input box and status badge immediately with exact DB count
+        if (pieceInput) {
+            pieceInput.value = newCount;
+        }
+        if (clothCurrentLoggedCount) {
+            clothCurrentLoggedCount.innerText = newCount + ' pcs';
+        }
+        updateBtn();
 
         // Show success banner
         if (successBanner) {
@@ -2517,13 +2401,19 @@ document.addEventListener('DOMContentLoaded', () => {
             const notesVal = document.getElementById('userNotesInput') ? document.getElementById('userNotesInput').value : '';
 
             const currentInBox = parseInt(pieceInput ? pieceInput.value : 0) || 0;
-            const existingCount = parseInt(getMaterialCurrentCount(materialVal, shiftVal)) || 0;
-            const piecesToAdd = (currentInBox > existingCount) ? (currentInBox - existingCount) : 1;
+            const existingCount = parseInt(getMaterialCurrentCount(materialVal)) || 0;
+
+            let targetCount = currentInBox;
+            // If counter is untouched or currently equals DB count, clicking Complete increments by 1
+            if (currentInBox === existingCount) {
+                targetCount = existingCount + 1;
+                if (pieceInput) pieceInput.value = targetCount;
+            }
 
             const formData = new FormData(stitchForm);
             formData.set('material_name', materialVal);
-            formData.set('piece_count', piecesToAdd);
-            formData.set('mode', 'add');
+            formData.set('piece_count', targetCount);
+            formData.set('mode', 'set_total');
             formData.set('shift', shiftVal);
             formData.set('notes', notesVal);
             formData.append('action', 'log_pieces');
@@ -2539,23 +2429,21 @@ document.addEventListener('DOMContentLoaded', () => {
                     applyLoggedPieceSuccess(data, materialVal, shiftVal, notesVal);
 
                     if (typeof showToast === 'function') {
-                        showToast(`✔ Piece #${data.current_material_count} saved for ${data.worker_name}! (${materialVal})`, 'success', 4000);
+                        showToast(`✔ Saved ${data.current_material_count} pcs for ${data.worker_name}! (${materialVal})`, 'success', 3500);
                     }
 
-                    if (currentCooldownDuration > 0) {
+                    if (currentCooldownDuration > 0 && targetCount > existingCount) {
                         startCooldownTimer(currentCooldownDuration);
                     } else {
                         completeBtn.disabled = false;
-                        if (completeBtnLabel) completeBtnLabel.innerText = 'Complete (+1)';
-                        if (completeBtnIcon) completeBtnIcon.className = 'fa-solid fa-circle-check';
+                        updateBtn();
                     }
                 } else {
                     if (typeof showToast === 'function') {
                         showToast(data.message || 'Failed to save piece.', 'error');
                     }
                     completeBtn.disabled = false;
-                    if (completeBtnLabel) completeBtnLabel.innerText = 'Complete (+1)';
-                    if (completeBtnIcon) completeBtnIcon.className = 'fa-solid fa-circle-check';
+                    updateBtn();
                 }
             } catch (err) {
                 console.error('Complete & Save error:', err);
@@ -2563,8 +2451,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     showToast('Network error while saving piece.', 'error');
                 }
                 completeBtn.disabled = false;
-                if (completeBtnLabel) completeBtnLabel.innerText = 'Complete (+1)';
-                if (completeBtnIcon) completeBtnIcon.className = 'fa-solid fa-circle-check';
+                updateBtn();
             }
         });
     }
