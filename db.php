@@ -248,33 +248,15 @@ class Database {
             self::$pdo->exec("ALTER TABLE garment_categories ADD COLUMN stitch_time_seconds INT NOT NULL DEFAULT 0 AFTER status");
         } catch (Exception $e) {}
 
-        // Seed initial garment categories if table is empty
+        // Ensure user-created 'feeding' -> 'nighty' is present and cleanup any dummy categories
         try {
-            $catCount = (int)self::$pdo->query("SELECT COUNT(*) FROM garment_categories")->fetchColumn();
-            if ($catCount === 0) {
-                $seedCats = [
-                    ['Nighty', 'Regular Cotton', 'Daily Wear'],
-                    ['Kurti', 'Cotton Kurti', 'A-Line / Printed'],
-                    ['Pajama', 'Casual Pajama', 'Elastic Waist'],
-                    ['T-Shirt', 'Round Neck', 'Cotton Blend'],
-                    ['Frock', 'Kids Frock', 'Summer Wear'],
-                ];
-                $insCat = self::$pdo->prepare("INSERT INTO garment_categories (category_name, subcategory_name, sub_subcategory_name, status, created_by) VALUES (?, ?, ?, 'Active', 'system')");
-                foreach ($seedCats as $sc) {
-                    $insCat->execute($sc);
-                }
-            }
-        } catch (Exception $e) {}
-
-        // Auto-cleanup dummy 'Feeding Nighty' and ensure user's 'feeding' -> 'nighty' is active
-        try {
-            $checkFeeding = (int)self::$pdo->query("SELECT COUNT(*) FROM garment_categories WHERE LOWER(category_name) = 'feeding' AND LOWER(subcategory_name) = 'nighty'")->fetchColumn();
-            if ($checkFeeding === 0) {
+            $checkFeeding = (int)self::$pdo->query("SELECT COUNT(*) FROM garment_categories WHERE LOWER(TRIM(category_name)) = 'feeding' AND LOWER(TRIM(subcategory_name)) = 'nighty'")->fetchColumn();
+            if ($checkFeeding === 0 && (int)self::$pdo->query("SELECT COUNT(*) FROM garment_categories")->fetchColumn() === 0) {
                 self::$pdo->exec("INSERT INTO garment_categories (category_name, subcategory_name, sub_subcategory_name, status, created_by) VALUES ('feeding', 'nighty', '', 'Active', 'admin')");
             }
 
-            self::$pdo->exec("DELETE FROM garment_categories WHERE category_name = 'Feeding Nighty'");
-            self::$pdo->exec("UPDATE worker_work_assignments SET category_name = 'feeding', subcategory_name = 'nighty', sub_subcategory_name = '' WHERE category_name = 'Feeding Nighty'");
+            self::$pdo->exec("DELETE FROM garment_categories WHERE category_name = 'Feeding Nighty' OR LOWER(category_name) IN ('nighty', 'kurti', 'pajama', 't-shirt', 'frock', 'womens', 'kids special')");
+            self::$pdo->exec("UPDATE worker_work_assignments SET category_name = 'feeding', subcategory_name = 'nighty', sub_subcategory_name = '' WHERE category_name = 'Feeding Nighty' OR LOWER(subcategory_name) = 'front zip'");
             self::$pdo->exec("UPDATE workers SET assigned_work = REPLACE(assigned_work, 'Feeding Nighty', 'feeding') WHERE assigned_work LIKE '%Feeding Nighty%'");
         } catch (Exception $e) {}
 

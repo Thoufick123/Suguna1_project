@@ -466,12 +466,28 @@ try {
             }
 
             // Verify worker exists
-            $wCheck = $pdo->prepare("SELECT id, name, unique_id, unit, total_pieces FROM workers WHERE id = :id");
+            $wCheck = $pdo->prepare("SELECT id, name, unique_id, unit, total_pieces, last_login FROM workers WHERE id = :id");
             $wCheck->execute([':id' => $worker_id]);
             $worker = $wCheck->fetch();
 
             if (!$worker) {
                 echo json_encode(['success' => false, 'message' => 'Worker not found in database.']);
+                exit;
+            }
+
+            // Validation: Daily login required for operator piece entry
+            $effLogin = !empty($worker['last_login']) ? $worker['last_login'] : null;
+            if (empty($effLogin)) {
+                $uStmt = $pdo->prepare("SELECT last_login FROM users WHERE LOWER(username) = LOWER(:uid) OR LOWER(full_name) = LOWER(:name) LIMIT 1");
+                $uStmt->execute([':uid' => $worker['unique_id'], ':name' => $worker['name']]);
+                $effLogin = $uStmt->fetchColumn();
+            }
+            $isLoggedInToday = (!empty($effLogin) && date('Y-m-d', strtotime($effLogin)) === date('Y-m-d'));
+            if (!$isLoggedInToday && (!$currentUser || $currentUser['role'] !== 'admin')) {
+                echo json_encode([
+                    'success' => false, 
+                    'message' => "Validation Error: {$worker['name']} ({$worker['unique_id']}) has not logged in today. Daily login is mandatory before recording piece output."
+                ]);
                 exit;
             }
 
@@ -1363,11 +1379,19 @@ try {
             $subName = trim($requestData['subcategory_name'] ?? '');
 
             if ($type === 'category' && !empty($catName)) {
-                $del = $pdo->prepare("DELETE FROM garment_categories WHERE category_name = :cat");
+                $del = $pdo->prepare("DELETE FROM garment_categories WHERE LOWER(TRIM(category_name)) = LOWER(TRIM(:cat))");
                 $del->execute([':cat' => $catName]);
+                try {
+                    $delAss = $pdo->prepare("DELETE FROM worker_work_assignments WHERE LOWER(TRIM(category_name)) = LOWER(TRIM(:cat))");
+                    $delAss->execute([':cat' => $catName]);
+                } catch (Exception $e) {}
             } elseif ($type === 'subcategory' && !empty($catName) && !empty($subName)) {
-                $del = $pdo->prepare("DELETE FROM garment_categories WHERE category_name = :cat AND subcategory_name = :sub");
+                $del = $pdo->prepare("DELETE FROM garment_categories WHERE LOWER(TRIM(category_name)) = LOWER(TRIM(:cat)) AND LOWER(TRIM(subcategory_name)) = LOWER(TRIM(:sub))");
                 $del->execute([':cat' => $catName, ':sub' => $subName]);
+                try {
+                    $delAss = $pdo->prepare("DELETE FROM worker_work_assignments WHERE LOWER(TRIM(category_name)) = LOWER(TRIM(:cat)) AND LOWER(TRIM(subcategory_name)) = LOWER(TRIM(:sub))");
+                    $delAss->execute([':cat' => $catName, ':sub' => $subName]);
+                } catch (Exception $e) {}
             } elseif ($id > 0) {
                 $del = $pdo->prepare("DELETE FROM garment_categories WHERE id = :id");
                 $del->execute([':id' => $id]);
@@ -2517,6 +2541,23 @@ try {
             $today = date('Y-m-d');
             $now = date('Y-m-d H:i:s');
             $assignedBy = $currentUser['username'] ?? 'admin';
+
+            // Validation: Work can strictly be assigned ONLY to operators/users who have logged in today!
+            $effLogin = !empty($worker['last_login']) ? $worker['last_login'] : null;
+            if (empty($effLogin)) {
+                $uStmt = $pdo->prepare("SELECT last_login FROM users WHERE LOWER(username) = LOWER(:uid) OR LOWER(full_name) = LOWER(:name) LIMIT 1");
+                $uStmt->execute([':uid' => $worker['unique_id'], ':name' => $worker['name']]);
+                $effLogin = $uStmt->fetchColumn();
+            }
+
+            $isLoggedInToday = (!empty($effLogin) && date('Y-m-d', strtotime($effLogin)) === $today);
+            if (!$isLoggedInToday && !empty($categoriesToAssign)) {
+                echo json_encode([
+                    'success' => false,
+                    'message' => "Validation Error: {$worker['name']} ({$worker['unique_id']}) has not logged in today. Work can only be assigned to operators who have logged in today."
+                ]);
+                exit;
+            }
 
             // If empty categories passed, admin is clearing today's assignment
             if (empty($categoriesToAssign)) {

@@ -319,10 +319,28 @@ $catPalette = [
 ];
 $palIdx = 0;
 
+// User role check (operator/worker or non-admin)
+$isUserRole = ($currentUser && $currentUser['role'] !== 'admin');
+
+// Check whether selected worker logged in today
+$isWorkerLoggedInToday = false;
+if ($worker) {
+    $effLogin = !empty($worker['last_login']) ? $worker['last_login'] : null;
+    if (empty($effLogin)) {
+        $uStmt = $pdo->prepare("SELECT last_login FROM users WHERE LOWER(username) = LOWER(:uid) OR LOWER(full_name) = LOWER(:name) LIMIT 1");
+        $uStmt->execute([':uid' => $worker['unique_id'], ':name' => $worker['name']]);
+        $effLogin = $uStmt->fetchColumn();
+    }
+    $isWorkerLoggedInToday = (!empty($effLogin) && date('Y-m-d', strtotime($effLogin)) === date('Y-m-d'));
+}
+
 // Fetch all active work assignments for selected worker
+// Daily work assignments are valid strictly if worker logged in today (or viewed by admin)
 $workerAssignments = [];
 $assignedCategoryNames = [];
-if ($selectedWorkerId > 0) {
+$assignedSubcategoryNames = [];
+
+if ($selectedWorkerId > 0 && ($isWorkerLoggedInToday || !$isUserRole)) {
     try {
         $assignStmt = $pdo->prepare("
             SELECT * FROM worker_work_assignments 
@@ -335,7 +353,8 @@ if ($selectedWorkerId > 0) {
         ]);
         $workerAssignments = $assignStmt->fetchAll(PDO::FETCH_ASSOC);
 
-        if (empty($workerAssignments)) {
+        // Fallback to recent active assignment ONLY if date is not today or admin viewing
+        if (empty($workerAssignments) && ($selectedDate !== date('Y-m-d') || !$isUserRole)) {
             $assignStmt2 = $pdo->prepare("
                 SELECT * FROM worker_work_assignments 
                 WHERE worker_id = :wid AND status = 'Active' 
@@ -345,7 +364,6 @@ if ($selectedWorkerId > 0) {
             $workerAssignments = $assignStmt2->fetchAll(PDO::FETCH_ASSOC);
         }
 
-        $assignedSubcategoryNames = [];
         foreach ($workerAssignments as $wa) {
             if (!empty($wa['subcategory_name'])) {
                 $sClean = trim($wa['subcategory_name']);
@@ -357,7 +375,7 @@ if ($selectedWorkerId > 0) {
             }
         }
 
-        if (empty($assignedCategoryNames) && !empty($worker['assigned_category_id'])) {
+        if (empty($assignedCategoryNames) && !empty($worker['assigned_category_id']) && (!$isUserRole || $isWorkerLoggedInToday)) {
             $cStmt = $pdo->prepare("SELECT * FROM garment_categories WHERE id = :cid LIMIT 1");
             $cStmt->execute([':cid' => (int)$worker['assigned_category_id']]);
             $cRow = $cStmt->fetch(PDO::FETCH_ASSOC);
@@ -365,16 +383,6 @@ if ($selectedWorkerId > 0) {
                 $cClean = trim($cRow['category_name']);
                 $assignedCategoryNames[strtolower($cClean)] = $cClean;
                 $workerAssignments[] = $cRow;
-            }
-        }
-
-        if (empty($assignedCategoryNames) && !empty($worker['assigned_work'])) {
-            $chunks = preg_split('/[,|]/', $worker['assigned_work']);
-            foreach ($chunks as $chunk) {
-                $catPart = trim(explode('-', $chunk)[0] ?? '');
-                if (!empty($catPart)) {
-                    $assignedCategoryNames[strtolower($catPart)] = $catPart;
-                }
             }
         }
     } catch (Exception $e) {}
@@ -459,17 +467,27 @@ while ($catRow = $catStmt->fetch(PDO::FETCH_ASSOC)) {
 }
 
 // User role check (operator/worker or non-admin)
-$isUserRole = ($currentUser && $currentUser['role'] !== 'admin');
 $showSubcategoriesOnly = $isUserRole || $hasAssignedWork;
 
-if ($showSubcategoriesOnly) {
-    if ($hasAssignedWork && !empty($workerAssignedSubcategories)) {
+if ($isUserRole) {
+    // STRICT VALIDATION: If operator did NOT login today or has no assigned work for today:
+    // DO NOT display subcategories!
+    if ($isWorkerLoggedInToday && $hasAssignedWork && !empty($workerAssignedSubcategories)) {
         $chipsToDisplay = $workerAssignedSubcategories;
     } else {
-        $chipsToDisplay = $adminSubcategoryChips;
+        $chipsToDisplay = [];
     }
 } else {
-    $chipsToDisplay = $adminCategoryChips;
+    // Admin / Supervisor view
+    if ($showSubcategoriesOnly) {
+        if ($hasAssignedWork && !empty($workerAssignedSubcategories)) {
+            $chipsToDisplay = $workerAssignedSubcategories;
+        } else {
+            $chipsToDisplay = $adminSubcategoryChips;
+        }
+    } else {
+        $chipsToDisplay = $adminCategoryChips;
+    }
 }
 
 include __DIR__ . '/includes/header.php';
@@ -484,6 +502,7 @@ window.isCurrentDateToday = <?= json_encode($selectedDate === date('Y-m-d')) ?>;
 window.lastLoggedMaterial = <?= json_encode(!empty($todayLogs) ? $todayLogs[0]['material_name'] : null) ?>;
 window.isUserRole = <?= json_encode($isUserRole) ?>;
 window.isOperator = <?= json_encode($isOperator) ?>;
+window.isWorkerLoggedInToday = <?= json_encode($isWorkerLoggedInToday) ?>;
 window.hasAssignedWork = <?= json_encode($hasAssignedWork) ?>;
 window.showSubcategoriesOnly = <?= json_encode($showSubcategoriesOnly) ?>;
 window.assignedCategory = <?= json_encode($workerAssignment['category_name'] ?? null) ?>;
@@ -1117,7 +1136,7 @@ function filterWorkersByUnit(unitName) {
         <!-- STEP 1: Quick Garment / Subcategory Tap Chips -->
         <div style="margin-bottom: 1.25rem;">
             <!-- If worker has assigned work for today, show prominent Assigned Work Banner -->
-            <?php if ($hasAssignedWork && !empty($assignedCategoryNames)): ?>
+            <?php if ($hasAssignedWork && !empty($assignedCategoryNames) && ($isWorkerLoggedInToday || !$isUserRole)): ?>
                 <div class="assigned-work-callout" style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.65rem 1rem; margin-bottom: 0.95rem; background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.35); border-radius: var(--radius-md); box-shadow: 0 0 16px rgba(16,185,129,0.12); flex-wrap: wrap;">
                     <div style="display: flex; align-items: center; gap: 0.65rem; font-size: 0.84rem; flex-wrap: wrap;">
                         <span style="display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: rgba(16,185,129,0.2); color: #34d399; font-size: 0.88rem; flex-shrink: 0;">
@@ -1221,16 +1240,37 @@ function filterWorkersByUnit(unitName) {
             <!-- Quick Chips Grid -->
             <div class="garment-quick-chips-grid" id="garmentQuickChipsGrid">
                 <?php if (empty($chipsToDisplay)): ?>
-                    <div class="uf-empty-categories-card">
-                        <div class="uf-empty-icon-ring">
-                            <i class="fa-solid fa-shirt"></i>
-                        </div>
-                        <div class="uf-empty-title">No Subcategories Available</div>
-                        <div class="uf-empty-desc">Ask your supervisor or admin to assign a work category in Units.</div>
-                        <?php if ($currentUser && ($currentUser['role'] === 'admin' || $currentUser['role'] === 'supervisor')): ?>
-                            <button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('btnToggleInlineAddCat')?.click();" style="border-radius: 99px; padding: 0.4rem 1.15rem; font-size: 0.8rem; font-weight: 700; display: inline-flex; align-items: center; gap: 0.4rem;">
-                                <i class="fa-solid fa-circle-plus"></i> Add First Garment Category
-                            </button>
+                    <div class="uf-empty-categories-card" style="padding: 2.25rem 1.5rem; text-align: center;">
+                        <?php if ($isUserRole && !$isWorkerLoggedInToday): ?>
+                            <div class="uf-empty-icon-ring" style="width: 58px; height: 58px; border-radius: 50%; background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.35); display: inline-flex; align-items: center; justify-content: center; font-size: 1.6rem; margin-bottom: 0.85rem;">
+                                <i class="fa-solid fa-user-lock"></i>
+                            </div>
+                            <div class="uf-empty-title" style="font-size: 1.1rem; font-weight: 800; color: #fbbf24; margin-bottom: 0.35rem;">Daily Login Required</div>
+                            <div class="uf-empty-desc" style="font-size: 0.86rem; color: var(--text-muted); max-width: 480px; margin: 0 auto 1.15rem auto; line-height: 1.45;">
+                                Work subcategories are strictly hidden until you log in today. Work assignment and subcategories are assigned on a daily basis upon attendance.
+                            </div>
+                            <a href="login.php?logout=1" class="btn btn-warning btn-sm" style="border-radius: 99px; padding: 0.45rem 1.25rem; font-weight: 700; color: #000; display: inline-flex; align-items: center; gap: 0.45rem;">
+                                <i class="fa-solid fa-right-to-bracket"></i> Login with Today's Operator ID
+                            </a>
+                        <?php elseif ($isUserRole && $isWorkerLoggedInToday && empty($workerAssignedSubcategories)): ?>
+                            <div class="uf-empty-icon-ring" style="width: 58px; height: 58px; border-radius: 50%; background: rgba(6,182,212,0.15); color: #38bdf8; border: 1px solid rgba(6,182,212,0.35); display: inline-flex; align-items: center; justify-content: center; font-size: 1.6rem; margin-bottom: 0.85rem;">
+                                <i class="fa-solid fa-hourglass-half"></i>
+                            </div>
+                            <div class="uf-empty-title" style="font-size: 1.1rem; font-weight: 800; color: #38bdf8; margin-bottom: 0.35rem;">Logged In Today • Waiting for Work Assignment</div>
+                            <div class="uf-empty-desc" style="font-size: 0.86rem; color: var(--text-muted); max-width: 480px; margin: 0 auto; line-height: 1.45;">
+                                You are active and logged in for today. Please wait for your unit supervisor or admin to assign today's garment subcategory.
+                            </div>
+                        <?php else: ?>
+                            <div class="uf-empty-icon-ring">
+                                <i class="fa-solid fa-shirt"></i>
+                            </div>
+                            <div class="uf-empty-title">No Subcategories Available</div>
+                            <div class="uf-empty-desc">Ask your supervisor or admin to assign a work category in Units.</div>
+                            <?php if ($currentUser && ($currentUser['role'] === 'admin' || $currentUser['role'] === 'supervisor')): ?>
+                                <button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('btnToggleInlineAddCat')?.click();" style="border-radius: 99px; padding: 0.4rem 1.15rem; font-size: 0.8rem; font-weight: 700; display: inline-flex; align-items: center; gap: 0.4rem;">
+                                    <i class="fa-solid fa-circle-plus"></i> Add First Garment Category
+                                </button>
+                            <?php endif; ?>
                         <?php endif; ?>
                     </div>
                 <?php else: ?>
@@ -1363,9 +1403,10 @@ function filterWorkersByUnit(unitName) {
             </button>
 
             <!-- Complete Button: Click directly increments count & instantly saves piece to DB under user name! -->
-            <button type="button" id="userCompleteBtn" class="btn btn-success uf-submit-btn" style="flex: 1; padding: 0.85rem 1.15rem; font-size: 1.05rem; font-weight: 800; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; gap: 0.55rem; box-shadow: 0 4px 14px rgba(16,185,129,0.3); white-space: nowrap;">
-                <i class="fa-solid fa-circle-check" id="userCompleteBtnIcon" style="font-size: 1.15rem;"></i>
-                <span id="userCompleteBtnLabel" style="white-space: nowrap;">Complete (+1)</span>
+            <button type="button" id="userCompleteBtn" class="btn btn-success uf-submit-btn" 
+                <?= ($isUserRole && !$isWorkerLoggedInToday) ? 'disabled style="flex: 1; padding: 0.85rem 1.15rem; font-size: 1.05rem; font-weight: 800; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; gap: 0.55rem; opacity: 0.5; cursor: not-allowed; background: rgba(255,255,255,0.06); border: 1px solid var(--border-color); color: var(--text-muted);"' : 'style="flex: 1; padding: 0.85rem 1.15rem; font-size: 1.05rem; font-weight: 800; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; gap: 0.55rem; box-shadow: 0 4px 14px rgba(16,185,129,0.3); white-space: nowrap;"' ?>>
+                <i class="fa-solid <?= ($isUserRole && !$isWorkerLoggedInToday) ? 'fa-lock' : 'fa-circle-check' ?>" id="userCompleteBtnIcon" style="font-size: 1.15rem;"></i>
+                <span id="userCompleteBtnLabel" style="white-space: nowrap;"><?= ($isUserRole && !$isWorkerLoggedInToday) ? 'Daily Login Required' : 'Complete (+1)' ?></span>
             </button>
         </div>
     </form>
@@ -2017,6 +2058,13 @@ document.addEventListener('DOMContentLoaded', () => {
     window.selectGarmentChip = function(matName, parentCatName = '', explicitStitchTime = null) {
         if (!matName) return;
 
+        if (window.isUserRole && !window.isWorkerLoggedInToday) {
+            if (typeof showToast === 'function') {
+                showToast('Daily login required! Work subcategories and pieces are locked until today\'s login.', 'error');
+            }
+            return;
+        }
+
         // 1. Highlight clicked chip & extract category stitch time
         const allChips = document.querySelectorAll('.garment-chip-btn');
         let foundParentCat = parentCatName;
@@ -2435,6 +2483,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                     return;
                 }
+            }
+
+            if (window.isUserRole && !window.isWorkerLoggedInToday) {
+                if (typeof showToast === 'function') {
+                    showToast('Daily login required! Work subcategories and pieces are locked until today\'s login.', 'error');
+                }
+                return;
             }
 
             let materialVal = clothSelect ? clothSelect.value.trim() : '';
@@ -2892,21 +2947,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
         let chipsList = [];
         if (mode === 'subcategory') {
-            if (window.hasAssignedWork && window.workerAssignedSubcategories && window.workerAssignedSubcategories.length > 0) {
-                chipsList = window.workerAssignedSubcategories;
-            } else if (window.adminSubcategoryChips && window.adminSubcategoryChips.length > 0) {
-                chipsList = window.adminSubcategoryChips;
+            if (window.isUserRole) {
+                if (window.isWorkerLoggedInToday && window.hasAssignedWork && window.workerAssignedSubcategories && window.workerAssignedSubcategories.length > 0) {
+                    chipsList = window.workerAssignedSubcategories;
+                } else {
+                    chipsList = [];
+                }
             } else {
-                Object.keys(dynamicGarmentTree).forEach(cName => {
-                    Object.keys(dynamicGarmentTree[cName]).forEach(sName => {
-                        chipsList.push({
-                            name: sName,
-                            category_name: cName,
-                            icon: 'fa-tag',
-                            color: '#06b6d4'
+                if (window.hasAssignedWork && window.workerAssignedSubcategories && window.workerAssignedSubcategories.length > 0) {
+                    chipsList = window.workerAssignedSubcategories;
+                } else if (window.adminSubcategoryChips && window.adminSubcategoryChips.length > 0) {
+                    chipsList = window.adminSubcategoryChips;
+                } else {
+                    Object.keys(dynamicGarmentTree).forEach(cName => {
+                        Object.keys(dynamicGarmentTree[cName]).forEach(sName => {
+                            chipsList.push({
+                                name: sName,
+                                category_name: cName,
+                                icon: 'fa-tag',
+                                color: '#06b6d4'
+                            });
                         });
                     });
-                });
+                }
             }
         } else {
             if (window.adminCategoryChips && window.adminCategoryChips.length > 0) {
@@ -2924,12 +2987,38 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (chipsList.length === 0) {
-            grid.innerHTML = `
-                <div style="grid-column: 1 / -1; padding: 1.25rem; text-align: center; color: var(--text-muted); background: rgba(255,255,255,0.02); border: 1px dashed var(--border-color); border-radius: var(--radius-md); font-size: 0.85rem;">
-                    <i class="fa-solid fa-inbox" style="font-size: 1.5rem; display: block; margin-bottom: 0.4rem; opacity: 0.5;"></i>
-                    No items available.
-                </div>
-            `;
+            if (window.isUserRole && !window.isWorkerLoggedInToday) {
+                grid.innerHTML = `
+                    <div style="grid-column: 1 / -1; padding: 2.25rem 1.5rem; text-align: center; color: var(--text-muted); background: rgba(245,158,11,0.05); border: 1px dashed rgba(245,158,11,0.3); border-radius: var(--radius-md);">
+                        <div style="width: 52px; height: 52px; border-radius: 50%; background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.35); display: inline-flex; align-items: center; justify-content: center; font-size: 1.5rem; margin-bottom: 0.75rem;">
+                            <i class="fa-solid fa-user-lock"></i>
+                        </div>
+                        <div style="font-size: 1.05rem; font-weight: 800; color: #fbbf24; margin-bottom: 0.35rem;">Daily Login Required</div>
+                        <p style="font-size: 0.85rem; color: var(--text-muted); max-width: 480px; margin: 0 auto; line-height: 1.45;">
+                            Work subcategories are strictly hidden until you log in today. Work assignment and subcategories are assigned on a daily basis upon attendance.
+                        </p>
+                    </div>
+                `;
+            } else if (window.isUserRole && window.isWorkerLoggedInToday && (!window.workerAssignedSubcategories || window.workerAssignedSubcategories.length === 0)) {
+                grid.innerHTML = `
+                    <div style="grid-column: 1 / -1; padding: 2.25rem 1.5rem; text-align: center; color: var(--text-muted); background: rgba(6,182,212,0.05); border: 1px dashed rgba(6,182,212,0.3); border-radius: var(--radius-md);">
+                        <div style="width: 52px; height: 52px; border-radius: 50%; background: rgba(6,182,212,0.15); color: #38bdf8; border: 1px solid rgba(6,182,212,0.35); display: inline-flex; align-items: center; justify-content: center; font-size: 1.5rem; margin-bottom: 0.75rem;">
+                            <i class="fa-solid fa-hourglass-half"></i>
+                        </div>
+                        <div style="font-size: 1.05rem; font-weight: 800; color: #38bdf8; margin-bottom: 0.35rem;">Logged In Today • Waiting for Work Assignment</div>
+                        <p style="font-size: 0.85rem; color: var(--text-muted); max-width: 480px; margin: 0 auto; line-height: 1.45;">
+                            You are active and logged in for today. Please wait for your unit supervisor or admin to assign today's garment subcategory.
+                        </p>
+                    </div>
+                `;
+            } else {
+                grid.innerHTML = `
+                    <div style="grid-column: 1 / -1; padding: 1.25rem; text-align: center; color: var(--text-muted); background: rgba(255,255,255,0.02); border: 1px dashed var(--border-color); border-radius: var(--radius-md); font-size: 0.85rem;">
+                        <i class="fa-solid fa-inbox" style="font-size: 1.5rem; display: block; margin-bottom: 0.4rem; opacity: 0.5;"></i>
+                        No items available.
+                    </div>
+                `;
+            }
             return;
         }
 

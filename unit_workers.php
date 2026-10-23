@@ -652,6 +652,10 @@ include __DIR__ . '/includes/header.php';
                                                     title="Assign Garment Production Categories">
                                                 <i class="fa-solid fa-clipboard-list"></i> Assign Work
                                             </button>
+                                        <?php else: ?>
+                                            <span class="badge-pill" style="font-size: 0.72rem; background: rgba(245,158,11,0.12); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); padding: 0.28rem 0.55rem; display: inline-flex; align-items: center; gap: 0.35rem;" title="Daily login required before work can be assigned">
+                                                <i class="fa-solid fa-user-clock"></i> Login Required
+                                            </span>
                                         <?php endif; ?>
                                     </span>
 
@@ -1377,7 +1381,11 @@ async function quickToggleWorkerActive(workerId) {
                         </button>
                     `;
                 } else {
-                    assignContainer.innerHTML = '';
+                    assignContainer.innerHTML = `
+                        <span class="badge-pill" style="font-size: 0.72rem; background: rgba(245,158,11,0.12); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); padding: 0.28rem 0.55rem; display: inline-flex; align-items: center; gap: 0.35rem;" title="Daily login required before work can be assigned">
+                            <i class="fa-solid fa-user-clock"></i> Login Required
+                        </span>
+                    `;
                 }
             }
 
