@@ -86,8 +86,15 @@ $usersQuery = "
     FROM users u
     LEFT JOIN workers w ON (
         LOWER(u.username) = LOWER(w.unique_id) 
-        OR LOWER(u.full_name) = LOWER(w.name)
         OR REPLACE(u.username, '-', '') = REPLACE(w.unique_id, '-', '')
+        OR (
+            LOWER(u.full_name) = LOWER(w.name)
+            AND NOT EXISTS (
+                SELECT 1 FROM workers w_sub 
+                WHERE LOWER(w_sub.unique_id) = LOWER(u.username) 
+                   OR REPLACE(w_sub.unique_id, '-', '') = REPLACE(u.username, '-', '')
+            )
+        )
     )
     ORDER BY u.id ASC
 ";

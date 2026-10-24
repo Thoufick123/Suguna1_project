@@ -24,9 +24,23 @@ function getCurrentUser(): ?array {
                 $status = 'Inactive';
             }
 
-            $stmt = $pdo->prepare("SELECT id, unit, status FROM workers WHERE id = :wid OR LOWER(unique_id) = LOWER(:u) OR LOWER(name) = LOWER(:n) LIMIT 1");
-            $stmt->execute([':wid' => (int)$workerId, ':u' => $_SESSION['username'], ':n' => $_SESSION['full_name'] ?? '']);
-            $w = $stmt->fetch(PDO::FETCH_ASSOC);
+            $w = null;
+            if ($workerId > 0) {
+                $stmt = $pdo->prepare("SELECT id, unit, status FROM workers WHERE id = :wid LIMIT 1");
+                $stmt->execute([':wid' => (int)$workerId]);
+                $w = $stmt->fetch(PDO::FETCH_ASSOC);
+            }
+            if (!$w && !empty($_SESSION['username'])) {
+                $uClean = $_SESSION['username'];
+                $stmt = $pdo->prepare("SELECT id, unit, status FROM workers WHERE LOWER(unique_id) = LOWER(:u) OR REPLACE(unique_id, '-', '') = REPLACE(:u_clean, '-', '') LIMIT 1");
+                $stmt->execute([':u' => $uClean, ':u_clean' => $uClean]);
+                $w = $stmt->fetch(PDO::FETCH_ASSOC);
+            }
+            if (!$w && !empty($_SESSION['full_name'])) {
+                $stmt = $pdo->prepare("SELECT id, unit, status FROM workers WHERE LOWER(name) = LOWER(:n) ORDER BY id DESC LIMIT 1");
+                $stmt->execute([':n' => $_SESSION['full_name']]);
+                $w = $stmt->fetch(PDO::FETCH_ASSOC);
+            }
             if ($w) {
                 $workerId = (int)$w['id'];
                 $_SESSION['worker_id'] = $workerId;
@@ -78,6 +92,23 @@ function requireAdmin(): void {
 function logoutUser(): void {
     if (session_status() === PHP_SESSION_NONE) {
         session_start();
+    }
+    if (!empty($_SESSION['user_id'])) {
+        try {
+            $pdo = Database::getConnection();
+            $uid = (int)$_SESSION['user_id'];
+            $wid = (int)($_SESSION['worker_id'] ?? 0);
+            $uname = trim($_SESSION['username'] ?? '');
+
+            $pdo->prepare("UPDATE users SET last_login = NULL WHERE id = :id")->execute([':id' => $uid]);
+            if ($wid > 0) {
+                $pdo->prepare("UPDATE workers SET last_login = NULL WHERE id = :id")->execute([':id' => $wid]);
+            }
+            if (!empty($uname)) {
+                $pdo->prepare("UPDATE workers SET last_login = NULL WHERE LOWER(unique_id) = LOWER(:u) OR REPLACE(unique_id, '-', '') = REPLACE(:u_clean, '-', '')")
+                    ->execute([':u' => $uname, ':u_clean' => $uname]);
+            }
+        } catch (Exception $e) {}
     }
     $_SESSION = [];
     if (ini_get("session.use_cookies")) {

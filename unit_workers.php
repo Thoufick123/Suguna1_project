@@ -81,7 +81,7 @@ $workersStmt = $pdo->prepare("
         w.*,
         (SELECT COUNT(*) FROM piece_logs WHERE worker_id = w.id) as total_entries,
         (SELECT material_name FROM piece_logs WHERE worker_id = w.id ORDER BY id DESC LIMIT 1) as latest_material,
-        (SELECT last_login FROM users WHERE LOWER(username) = LOWER(w.unique_id) OR LOWER(full_name) = LOWER(w.name) LIMIT 1) as user_last_login,
+        (SELECT last_login FROM users WHERE LOWER(username) = LOWER(w.unique_id) OR REPLACE(username, '-', '') = REPLACE(w.unique_id, '-', '') OR (LOWER(full_name) = LOWER(w.name) AND NOT EXISTS (SELECT 1 FROM users u_sub WHERE LOWER(u_sub.username) = LOWER(w.unique_id))) LIMIT 1) as user_last_login,
         (SELECT GROUP_CONCAT(DISTINCT category_name SEPARATOR ', ') FROM worker_work_assignments WHERE worker_id = w.id AND assigned_date = CURDATE() AND status = 'Active') as today_assigned_cats,
         (SELECT category_name FROM worker_work_assignments WHERE worker_id = w.id AND assigned_date = CURDATE() ORDER BY id DESC LIMIT 1) as today_assigned_cat,
         (SELECT subcategory_name FROM worker_work_assignments WHERE worker_id = w.id AND assigned_date = CURDATE() ORDER BY id DESC LIMIT 1) as today_assigned_subcat,

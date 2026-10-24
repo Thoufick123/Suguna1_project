@@ -525,6 +525,35 @@ try {
                 exit;
             }
 
+            // Validation: Operator can strictly log pieces ONLY for categories assigned to them for today!
+            if ($currentUser && $currentUser['role'] === 'operator') {
+                $assignCheck = $pdo->prepare("
+                    SELECT COUNT(*) FROM worker_work_assignments 
+                    WHERE worker_id = :wid 
+                      AND assigned_date = :adate 
+                      AND status = 'Active' 
+                      AND (LOWER(TRIM(category_name)) = LOWER(TRIM(:mat)) 
+                           OR LOWER(TRIM(subcategory_name)) = LOWER(TRIM(:mat))
+                           OR LOWER(TRIM(sub_subcategory_name)) = LOWER(TRIM(:mat)))
+                ");
+                $assignCheck->execute([':wid' => $worker_id, ':adate' => $work_date, ':mat' => $material_name]);
+                $isCatAssigned = ((int)$assignCheck->fetchColumn() > 0);
+
+                if (!$isCatAssigned && !empty($worker['assigned_work'])) {
+                    if (stripos($worker['assigned_work'], $material_name) !== false) {
+                        $isCatAssigned = true;
+                    }
+                }
+
+                if (!$isCatAssigned) {
+                    echo json_encode([
+                        'success' => false,
+                        'message' => "Validation Error: Work category '{$material_name}' has not been assigned to {$worker['name']} for today. Please wait for your supervisor to assign work."
+                    ]);
+                    exit;
+                }
+            }
+
             $currentUnit = !empty($requestData['unit']) ? trim($requestData['unit']) : (!empty($worker['unit']) ? $worker['unit'] : 'Unit 1');
 
             // Find existing entry for this worker, date, and material
@@ -1060,8 +1089,15 @@ try {
                     SELECT w.* FROM workers w
                     JOIN users u ON (
                         LOWER(u.username) = LOWER(w.unique_id)
-                        OR LOWER(u.full_name) = LOWER(w.name)
                         OR REPLACE(u.username, '-', '') = REPLACE(w.unique_id, '-', '')
+                        OR (
+                            LOWER(u.full_name) = LOWER(w.name)
+                            AND NOT EXISTS (
+                                SELECT 1 FROM workers w_sub 
+                                WHERE LOWER(w_sub.unique_id) = LOWER(u.username) 
+                                   OR REPLACE(w_sub.unique_id, '-', '') = REPLACE(u.username, '-', '')
+                            )
+                        )
                     )
                     WHERE u.username = :username OR u.id = :uid
                     LIMIT 1
@@ -2526,7 +2562,18 @@ try {
             if ($workerId <= 0 && $userId > 0) {
                 $wFind = $pdo->prepare("
                     SELECT w.id FROM workers w 
-                    JOIN users u ON (LOWER(u.username) = LOWER(w.unique_id) OR LOWER(u.full_name) = LOWER(w.name) OR REPLACE(u.username, '-', '') = REPLACE(w.unique_id, '-', '')) 
+                    JOIN users u ON (
+                        LOWER(u.username) = LOWER(w.unique_id) 
+                        OR REPLACE(u.username, '-', '') = REPLACE(w.unique_id, '-', '') 
+                        OR (
+                            LOWER(u.full_name) = LOWER(w.name)
+                            AND NOT EXISTS (
+                                SELECT 1 FROM workers w_sub 
+                                WHERE LOWER(w_sub.unique_id) = LOWER(u.username) 
+                                   OR REPLACE(w_sub.unique_id, '-', '') = REPLACE(u.username, '-', '')
+                            )
+                        )
+                    ) 
                     WHERE u.id = :uid LIMIT 1
                 ");
                 $wFind->execute([':uid' => $userId]);
@@ -2538,11 +2585,16 @@ try {
             if ($workerId <= 0 && !empty($username)) {
                 $wFind = $pdo->prepare("
                     SELECT id FROM workers 
-                    WHERE LOWER(unique_id) = LOWER(:u) OR LOWER(name) = LOWER(:u) OR REPLACE(unique_id, '-', '') = REPLACE(:u, '-', '') 
+                    WHERE LOWER(unique_id) = LOWER(:u) OR REPLACE(unique_id, '-', '') = REPLACE(:u, '-', '') 
                     LIMIT 1
                 ");
                 $wFind->execute([':u' => $username]);
                 $foundWid = $wFind->fetchColumn();
+                if (!$foundWid) {
+                    $wFind2 = $pdo->prepare("SELECT id FROM workers WHERE LOWER(name) = LOWER(:u) ORDER BY id DESC LIMIT 1");
+                    $wFind2->execute([':u' => $username]);
+                    $foundWid = $wFind2->fetchColumn();
+                }
                 if ($foundWid) {
                     $workerId = (int)$foundWid;
                 }
@@ -2730,7 +2782,7 @@ try {
 
             $wStmt = $pdo->prepare("
                 SELECT w.id, w.name, w.unique_id, w.unit, w.role, w.assigned_work, w.assigned_category_id, w.assigned_at, w.last_login,
-                       (SELECT last_login FROM users WHERE LOWER(username) = LOWER(w.unique_id) OR LOWER(full_name) = LOWER(w.name) LIMIT 1) as user_last_login
+                       (SELECT last_login FROM users WHERE LOWER(username) = LOWER(w.unique_id) OR REPLACE(username, '-', '') = REPLACE(w.unique_id, '-', '') OR (LOWER(full_name) = LOWER(w.name) AND NOT EXISTS (SELECT 1 FROM users u_sub WHERE LOWER(u_sub.username) = LOWER(w.unique_id))) LIMIT 1) as user_last_login
                 FROM workers w 
                 WHERE w.id = :wid
             ");
@@ -2745,7 +2797,7 @@ try {
             $effectiveLogin = $worker['last_login'] ?: $worker['user_last_login'];
             $isActiveToday = (!empty($effectiveLogin) && date('Y-m-d', strtotime($effectiveLogin)) === date('Y-m-d'));
 
-            // Fetch today's active assignments
+            // Fetch today's active assignments strictly for today
             $todayStmt = $pdo->prepare("
                 SELECT * FROM worker_work_assignments 
                 WHERE worker_id = :wid AND assigned_date = CURDATE() AND status = 'Active' 
@@ -2753,16 +2805,6 @@ try {
             ");
             $todayStmt->execute([':wid' => $workerId]);
             $todayAssignments = $todayStmt->fetchAll(PDO::FETCH_ASSOC);
-
-            if (empty($todayAssignments)) {
-                $latestStmt = $pdo->prepare("
-                    SELECT * FROM worker_work_assignments 
-                    WHERE worker_id = :wid AND status = 'Active' 
-                    ORDER BY id DESC LIMIT 10
-                ");
-                $latestStmt->execute([':wid' => $workerId]);
-                $todayAssignments = $latestStmt->fetchAll(PDO::FETCH_ASSOC);
-            }
 
             $assignedCategoryNames = [];
             $assignedCategoryIds = [];

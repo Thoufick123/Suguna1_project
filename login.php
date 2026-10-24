@@ -322,9 +322,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $_SESSION['role'] = $user['role'];
                         $_SESSION['unit'] = $user['unit'];
 
-                        $wFind = $pdo->prepare("SELECT id, unit FROM workers WHERE LOWER(unique_id) = LOWER(:uid) OR LOWER(name) = LOWER(:name) LIMIT 1");
-                        $wFind->execute([':uid' => $user['username'], ':name' => $user['full_name']]);
+                        $wFind = $pdo->prepare("SELECT id, unit FROM workers WHERE LOWER(unique_id) = LOWER(:uid) OR REPLACE(unique_id, '-', '') = REPLACE(:uid_clean, '-', '') LIMIT 1");
+                        $wFind->execute([':uid' => $user['username'], ':uid_clean' => $user['username']]);
                         $workerRow = $wFind->fetch(PDO::FETCH_ASSOC);
+                        if (!$workerRow && !empty($user['full_name'])) {
+                            $wFind2 = $pdo->prepare("SELECT id, unit FROM workers WHERE LOWER(name) = LOWER(:name) ORDER BY id DESC LIMIT 1");
+                            $wFind2->execute([':name' => $user['full_name']]);
+                            $workerRow = $wFind2->fetch(PDO::FETCH_ASSOC);
+                        }
                         if ($workerRow) {
                             $_SESSION['worker_id'] = (int)$workerRow['id'];
                             if (empty($_SESSION['unit']) || $_SESSION['unit'] === 'All') {

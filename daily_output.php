@@ -351,8 +351,8 @@ if ($selectedWorkerId > 0 && ($isWorkerLoggedInToday || !$isUserRole)) {
         ]);
         $workerAssignments = $assignStmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // Fallback to recent active assignment ONLY if date is not today or admin viewing
-        if (empty($workerAssignments) && ($selectedDate !== date('Y-m-d') || !$isUserRole)) {
+        // Fallback to recent active assignment ONLY if date is not today (viewing past logs)
+        if (empty($workerAssignments) && $selectedDate !== date('Y-m-d')) {
             $assignStmt2 = $pdo->prepare("
                 SELECT * FROM worker_work_assignments 
                 WHERE worker_id = :wid AND status = 'Active' 
@@ -373,7 +373,8 @@ if ($selectedWorkerId > 0 && ($isWorkerLoggedInToday || !$isUserRole)) {
             }
         }
 
-        if (empty($assignedCategoryNames) && !empty($worker['assigned_category_id']) && (!$isUserRole || $isWorkerLoggedInToday)) {
+        // Only allow fallback to worker.assigned_category_id if viewing past date and not an operator on today's view
+        if (empty($assignedCategoryNames) && !empty($worker['assigned_category_id']) && $selectedDate !== date('Y-m-d')) {
             $cStmt = $pdo->prepare("SELECT * FROM garment_categories WHERE id = :cid LIMIT 1");
             $cStmt->execute([':cid' => (int)$worker['assigned_category_id']]);
             $cRow = $cStmt->fetch(PDO::FETCH_ASSOC);
@@ -469,11 +470,12 @@ $showSubcategoriesOnly = $isUserRole || $hasAssignedWork;
 
 if ($isUserRole) {
     // STRICT VALIDATION: If operator did NOT login today or has no assigned work for today:
-    // DO NOT display subcategories!
+    // DO NOT display subcategories or allow tier selector auto-selection!
     if ($isWorkerLoggedInToday && $hasAssignedWork && !empty($workerAssignedSubcategories)) {
         $chipsToDisplay = $workerAssignedSubcategories;
     } else {
         $chipsToDisplay = [];
+        $garmentTree = [];
     }
 } else {
     // Admin / Supervisor view
@@ -1378,10 +1380,15 @@ function filterWorkersByUnit(unitName) {
             </button>
 
             <!-- Complete Button: Click directly increments count & instantly saves piece to DB under user name! -->
+            <?php
+            $isCompleteLocked = ($isUserRole && (!$isWorkerLoggedInToday || !$hasAssignedWork));
+            $completeIcon = ($isUserRole && !$isWorkerLoggedInToday) ? 'fa-lock' : (($isUserRole && !$hasAssignedWork) ? 'fa-hourglass-half' : 'fa-circle-check');
+            $completeLabel = ($isUserRole && !$isWorkerLoggedInToday) ? 'Daily Login Required' : (($isUserRole && !$hasAssignedWork) ? 'Waiting for Work Assignment' : 'Complete (+1)');
+            ?>
             <button type="button" id="userCompleteBtn" class="btn btn-success uf-submit-btn" 
-                <?= ($isUserRole && !$isWorkerLoggedInToday) ? 'disabled style="flex: 1; padding: 0.85rem 1.15rem; font-size: 1.05rem; font-weight: 800; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; gap: 0.55rem; opacity: 0.5; cursor: not-allowed; background: rgba(255,255,255,0.06); border: 1px solid var(--border-color); color: var(--text-muted);"' : 'style="flex: 1; padding: 0.85rem 1.15rem; font-size: 1.05rem; font-weight: 800; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; gap: 0.55rem; box-shadow: 0 4px 14px rgba(16,185,129,0.3); white-space: nowrap;"' ?>>
-                <i class="fa-solid <?= ($isUserRole && !$isWorkerLoggedInToday) ? 'fa-lock' : 'fa-circle-check' ?>" id="userCompleteBtnIcon" style="font-size: 1.15rem;"></i>
-                <span id="userCompleteBtnLabel" style="white-space: nowrap;"><?= ($isUserRole && !$isWorkerLoggedInToday) ? 'Daily Login Required' : 'Complete (+1)' ?></span>
+                <?= $isCompleteLocked ? 'disabled style="flex: 1; padding: 0.85rem 1.15rem; font-size: 1.05rem; font-weight: 800; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; gap: 0.55rem; opacity: 0.5; cursor: not-allowed; background: rgba(255,255,255,0.06); border: 1px solid var(--border-color); color: var(--text-muted);"' : 'style="flex: 1; padding: 0.85rem 1.15rem; font-size: 1.05rem; font-weight: 800; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; gap: 0.55rem; box-shadow: 0 4px 14px rgba(16,185,129,0.3); white-space: nowrap;"' ?>>
+                <i class="fa-solid <?= $completeIcon ?>" id="userCompleteBtnIcon" style="font-size: 1.15rem;"></i>
+                <span id="userCompleteBtnLabel" style="white-space: nowrap;"><?= $completeLabel ?></span>
             </button>
         </div>
     </form>
@@ -2376,6 +2383,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
+            if (window.isUserRole && !window.hasAssignedWork) {
+                if (typeof showToast === 'function') {
+                    showToast('No work category has been assigned to you for today. Please wait for your supervisor to assign work.', 'error');
+                }
+                return;
+            }
+
             let materialVal = clothSelect ? clothSelect.value.trim() : '';
             if (materialVal === '__custom__') {
                 materialVal = customClothInput ? customClothInput.value.trim() : '';
@@ -2631,6 +2645,23 @@ document.addEventListener('DOMContentLoaded', () => {
     function populateTier1(tree, preselectCat = null, preselectSub = null, preselectGarment = null) {
         if (!tier1Select) return;
         dynamicGarmentTree = tree;
+
+        if (window.isUserRole && !window.hasAssignedWork) {
+            tier1Select.innerHTML = '<option value="">-- Waiting for Work Assignment --</option>';
+            tier1Select.disabled = true;
+            if (tier2Select) {
+                tier2Select.innerHTML = '<option value="">-- No Work Assigned --</option>';
+                tier2Select.disabled = true;
+            }
+            if (tier3Select) {
+                tier3Select.innerHTML = '<option value="">-- No Work Assigned --</option>';
+                tier3Select.disabled = true;
+            }
+            if (clothSelect) clothSelect.value = '';
+            if (breadcrumbBox) breadcrumbBox.style.display = 'none';
+            return;
+        }
+
         const catKeys = Object.keys(tree);
 
         tier1Select.innerHTML = '<option value="">-- Choose Category --</option>';
@@ -3118,6 +3149,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Auto-select garment: restores existing active category on refresh / login
     setTimeout(() => {
+        if (window.isUserRole && !window.hasAssignedWork) {
+            if (clothSelect) clothSelect.value = '';
+            if (breadcrumbBox) breadcrumbBox.style.display = 'none';
+            const pInput = document.getElementById('userPieceCountInput');
+            if (pInput) pInput.value = 0;
+            return;
+        }
+
         let targetGarment = '';
         // 1. Priority 1: Worker's assigned work subcategory for today
         if (window.assignedSubcategory) {
