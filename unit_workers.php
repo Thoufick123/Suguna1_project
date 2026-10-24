@@ -135,7 +135,12 @@ foreach ($workersList as &$w) {
     }
 
     // Effective login detection (today's login)
-    $effLogin = !empty($w['last_login']) ? $w['last_login'] : (!empty($w['user_last_login']) ? $w['user_last_login'] : null);
+    $loginCandidates = array_filter([$w['last_login'] ?? null, $w['user_last_login'] ?? null]);
+    $effLogin = null;
+    if (!empty($loginCandidates)) {
+        rsort($loginCandidates);
+        $effLogin = $loginCandidates[0];
+    }
     $w['effective_login'] = $effLogin;
     $w['is_logged_in_today'] = (!empty($effLogin) && date('Y-m-d', strtotime($effLogin)) === date('Y-m-d'));
 
@@ -194,6 +199,22 @@ include __DIR__ . '/includes/header.php';
     background: #10b981;
     display: inline-block;
     animation: pulseGlowEmerald 1.8s infinite;
+}
+
+/* Real-Time Live Status Transition Flash */
+.live-update-flash-active {
+    animation: liveFlashGreen 1.8s ease-out;
+}
+@keyframes liveFlashGreen {
+    0% { background: rgba(16, 185, 129, 0.35) !important; box-shadow: inset 0 0 15px rgba(16, 185, 129, 0.4); }
+    100% { background: transparent; box-shadow: none; }
+}
+.live-update-flash-inactive {
+    animation: liveFlashAmber 1.8s ease-out;
+}
+@keyframes liveFlashAmber {
+    0% { background: rgba(245, 158, 11, 0.28) !important; box-shadow: inset 0 0 15px rgba(245, 158, 11, 0.35); }
+    100% { background: transparent; box-shadow: none; }
 }
 
 .active-status-filter-group {
@@ -1315,6 +1336,197 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 });
 
+// Function to update a single worker row in the DOM smoothly when login/logout happens
+function applyWorkerLiveStatusUpdate(worker, triggerFlash) {
+    if (!worker || !worker.id) return false;
+    const workerId = worker.id;
+    const row = document.getElementById('workerRow_' + workerId);
+    if (!row) return false;
+
+    const currentActive = (row.getAttribute('data-is-active') === '1');
+    const newActive = Boolean(worker.is_active);
+    const currentAssigned = row.getAttribute('data-assigned-work') || '';
+    const newAssigned = worker.assigned_work || '';
+
+    let changed = false;
+
+    // Check if active / logged-in status changed
+    if (currentActive !== newActive) {
+        changed = true;
+        row.setAttribute('data-is-active', newActive ? '1' : '0');
+
+        // 1. Tick Symbol next to worker name (ONLY for active/logged-in worker)
+        const tickContainer = document.getElementById('workerTickContainer_' + workerId);
+        if (tickContainer) {
+            if (newActive) {
+                tickContainer.innerHTML = `
+                    <span class="worker-login-tick-badge" id="workerTick_${workerId}" title="Active Today • Logged In at ${worker.formatted_time || 'Today'}">
+                        <i class="fa-solid fa-circle-check"></i>
+                    </span>
+                `;
+            } else {
+                tickContainer.innerHTML = '';
+            }
+        }
+
+        // 2. Active status pill next to ID
+        const activePill = document.getElementById('activePill_' + workerId);
+        if (activePill) {
+            if (newActive) {
+                activePill.className = 'badge-pill unit-emerald-pill worker-active-pill';
+                activePill.style.background = '';
+                activePill.style.color = '';
+                activePill.style.border = '';
+                activePill.innerHTML = '<span class="pulse-emerald-dot"></span> Active';
+            } else {
+                activePill.className = 'badge-pill worker-active-pill';
+                activePill.style.background = 'rgba(148,163,184,0.12)';
+                activePill.style.color = '#94a3b8';
+                activePill.style.border = '1px solid rgba(148,163,184,0.25)';
+                activePill.innerHTML = 'Inactive';
+            }
+        }
+
+        // 3. Assign Work button vs Login Required badge
+        const assignContainer = document.getElementById('assignWorkContainer_' + workerId);
+        if (assignContainer) {
+            if (newActive) {
+                const wName = (row.getAttribute('data-worker-name') || worker.name || '').replace(/'/g, "\\'");
+                const wUid = (row.getAttribute('data-worker-uid') || worker.unique_id || '').replace(/'/g, "\\'");
+                const wUnit = (row.getAttribute('data-worker-unit') || worker.unit || '').replace(/'/g, "\\'");
+                const wRole = (row.getAttribute('data-worker-role') || worker.role || '').replace(/'/g, "\\'");
+                const wAssigned = (newAssigned || row.getAttribute('data-assigned-work') || '').replace(/'/g, "\\'");
+                assignContainer.innerHTML = `
+                    <button type="button" 
+                            class="btn btn-sm btn-assign-work" 
+                            id="assignWorkBtn_${workerId}"
+                            onclick="openAssignWorkModal(${workerId}, '${wName}', '${wUid}', '${wUnit}', '${wRole}', '${wAssigned}')"
+                            title="Assign Garment Production Categories">
+                        <i class="fa-solid fa-clipboard-list"></i> Assign Work
+                    </button>
+                `;
+            } else {
+                assignContainer.innerHTML = `
+                    <span class="badge-pill" style="font-size: 0.72rem; background: rgba(245,158,11,0.12); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); padding: 0.28rem 0.55rem; display: inline-flex; align-items: center; gap: 0.35rem;" title="Daily login required before work can be assigned">
+                        <i class="fa-solid fa-user-clock"></i> Login Required
+                    </span>
+                `;
+            }
+        }
+
+        // 4. Quick Active button in actions
+        const toggleBtn = document.getElementById('toggleActiveBtn_' + workerId);
+        if (toggleBtn) {
+            if (newActive) {
+                toggleBtn.className = 'btn btn-outline btn-sm btn-quick-active is-active-btn';
+                toggleBtn.title = 'Active Today • Click to mark Inactive';
+                toggleBtn.innerHTML = '<i class="fa-solid fa-circle-check text-emerald"></i> <span class="btn-active-label">Active</span>';
+            } else {
+                toggleBtn.className = 'btn btn-outline btn-sm btn-quick-active is-inactive-btn';
+                toggleBtn.title = 'Click to Activate for Today & generate tick';
+                toggleBtn.innerHTML = '<i class="fa-solid fa-power-off text-muted"></i> <span class="btn-active-label">Activate</span>';
+            }
+        }
+
+        // 5. Visual pulse flash on the row so user sees immediate feedback without refreshing
+        if (triggerFlash !== false) {
+            row.classList.remove('live-update-flash-active', 'live-update-flash-inactive');
+            void row.offsetWidth; // Force CSS reflow
+            row.classList.add(newActive ? 'live-update-flash-active' : 'live-update-flash-inactive');
+            setTimeout(() => {
+                row.classList.remove('live-update-flash-active', 'live-update-flash-inactive');
+            }, 1800);
+        }
+    }
+
+    // Check if assigned work changed
+    if (newAssigned !== undefined && currentAssigned !== newAssigned) {
+        changed = true;
+        row.setAttribute('data-assigned-work', newAssigned);
+        const assignedTag = document.getElementById('assignedTag_' + workerId);
+        if (assignedTag) {
+            if (newAssigned) {
+                assignedTag.style.display = 'block';
+                assignedTag.innerHTML = `
+                    <span class="badge-pill" style="background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.35); font-size: 0.72rem; display: inline-flex; align-items: center; gap: 0.3rem;" title="Assigned Work Category">
+                        <i class="fa-solid fa-clipboard-check"></i> Work: <strong style="color: #fff;">${newAssigned}</strong>
+                    </span>
+                `;
+            } else {
+                assignedTag.style.display = 'none';
+                assignedTag.innerHTML = '';
+            }
+        }
+    }
+
+    return changed;
+}
+
+// Real-time polling loop to detect login/logout instantly without refreshing
+let liveWorkerPollTimer = null;
+let isPollingLiveWorkerStatus = false;
+
+async function checkLiveWorkerStatuses() {
+    if (isPollingLiveWorkerStatus) return;
+    isPollingLiveWorkerStatus = true;
+
+    try {
+        const res = await fetch('api.php?action=get_live_worker_statuses&unit=' + encodeURIComponent('<?= $requestedUnit ?>'));
+        if (!res.ok) return;
+        const data = await res.json();
+
+        if (data.success && Array.isArray(data.workers)) {
+            let anyChange = false;
+            data.workers.forEach(worker => {
+                const updated = applyWorkerLiveStatusUpdate(worker, true);
+                if (updated) anyChange = true;
+            });
+
+            // Update header Active Today counter badge
+            const activeCountEl = document.getElementById('activeCountDisplay');
+            if (activeCountEl) {
+                const totalActive = (typeof data.active_count === 'number') ? data.active_count : document.querySelectorAll('.unit-worker-row[data-is-active="1"]').length;
+                activeCountEl.innerText = totalActive;
+            }
+
+            // If active tab filter is currently active and someone logged in/out, re-filter
+            if (anyChange && typeof currentActiveFilter !== 'undefined' && currentActiveFilter === 'active') {
+                if (typeof applyWorkersTableFilters === 'function') {
+                    applyWorkersTableFilters();
+                }
+            }
+        }
+    } catch (e) {
+        // Silently handle temporary network glitches
+    } finally {
+        isPollingLiveWorkerStatus = false;
+    }
+}
+
+// Start polling every 3 seconds (3000ms)
+function startLiveWorkerStatusPolling() {
+    if (liveWorkerPollTimer) clearInterval(liveWorkerPollTimer);
+    liveWorkerPollTimer = setInterval(() => {
+        if (!document.hidden) {
+            checkLiveWorkerStatuses();
+        }
+    }, 3000);
+}
+
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+        // Instant check when user switches back to this tab
+        checkLiveWorkerStatuses();
+    }
+});
+
+// Initialize on page load
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', startLiveWorkerStatusPolling);
+} else {
+    startLiveWorkerStatusPolling();
+}
+
 async function quickToggleWorkerActive(workerId) {
     const row = document.getElementById('workerRow_' + workerId);
     if (!row) return;
@@ -1331,79 +1543,18 @@ async function quickToggleWorkerActive(workerId) {
         const data = await res.json();
 
         if (data.success) {
-            row.setAttribute('data-is-active', data.is_active ? '1' : '0');
+            applyWorkerLiveStatusUpdate({
+                id: workerId,
+                name: row.getAttribute('data-worker-name'),
+                unique_id: row.getAttribute('data-worker-uid'),
+                unit: row.getAttribute('data-worker-unit'),
+                role: row.getAttribute('data-worker-role'),
+                is_active: data.is_active,
+                formatted_time: data.formatted_time || 'Today',
+                assigned_work: row.getAttribute('data-assigned-work') || ''
+            }, true);
 
-            // 1. Tick Symbol next to worker name (ONLY for active/logged-in worker)
-            const tickContainer = document.getElementById('workerTickContainer_' + workerId);
-            if (tickContainer) {
-                if (data.is_active) {
-                    tickContainer.innerHTML = `
-                        <span class="worker-login-tick-badge" id="workerTick_${workerId}" title="Active Today • Logged In at ${data.formatted_time || 'Today'}">
-                            <i class="fa-solid fa-circle-check"></i>
-                        </span>
-                    `;
-                } else {
-                    tickContainer.innerHTML = '';
-                }
-            }
-
-            // 2. Active status pill next to ID
-            const activePill = document.getElementById('activePill_' + workerId);
-            if (activePill) {
-                if (data.is_active) {
-                    activePill.className = 'badge-pill unit-emerald-pill worker-active-pill';
-                    activePill.innerHTML = '<span class="pulse-emerald-dot"></span> Active';
-                } else {
-                    activePill.className = 'badge-pill worker-active-pill';
-                    activePill.style.background = 'rgba(148,163,184,0.12)';
-                    activePill.style.color = '#94a3b8';
-                    activePill.style.border = '1px solid rgba(148,163,184,0.25)';
-                    activePill.innerHTML = 'Inactive';
-                }
-            }
-
-            // 3. Assign Work button: ONLY visible for logged-in / active user!
-            const assignContainer = document.getElementById('assignWorkContainer_' + workerId);
-            if (assignContainer) {
-                if (data.is_active) {
-                    const wName = (row.getAttribute('data-worker-name') || '').replace(/'/g, "\\'");
-                    const wUid = (row.getAttribute('data-worker-uid') || '').replace(/'/g, "\\'");
-                    const wUnit = (row.getAttribute('data-worker-unit') || '').replace(/'/g, "\\'");
-                    const wRole = (row.getAttribute('data-worker-role') || '').replace(/'/g, "\\'");
-                    const wAssigned = (row.getAttribute('data-assigned-work') || '').replace(/'/g, "\\'");
-                    assignContainer.innerHTML = `
-                        <button type="button" 
-                                class="btn btn-sm btn-assign-work" 
-                                id="assignWorkBtn_${workerId}"
-                                onclick="openAssignWorkModal(${workerId}, '${wName}', '${wUid}', '${wUnit}', '${wRole}', '${wAssigned}')"
-                                title="Assign Garment Production Categories">
-                            <i class="fa-solid fa-clipboard-list"></i> Assign Work
-                        </button>
-                    `;
-                } else {
-                    assignContainer.innerHTML = `
-                        <span class="badge-pill" style="font-size: 0.72rem; background: rgba(245,158,11,0.12); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); padding: 0.28rem 0.55rem; display: inline-flex; align-items: center; gap: 0.35rem;" title="Daily login required before work can be assigned">
-                            <i class="fa-solid fa-user-clock"></i> Login Required
-                        </span>
-                    `;
-                }
-            }
-
-            // 4. Quick Active button in actions
-            const toggleBtn = document.getElementById('toggleActiveBtn_' + workerId);
-            if (toggleBtn) {
-                if (data.is_active) {
-                    toggleBtn.className = 'btn btn-outline btn-sm btn-quick-active is-active-btn';
-                    toggleBtn.title = 'Active Today • Click to mark Inactive';
-                    toggleBtn.innerHTML = '<i class="fa-solid fa-circle-check text-emerald"></i> <span class="btn-active-label">Active</span>';
-                } else {
-                    toggleBtn.className = 'btn btn-outline btn-sm btn-quick-active is-inactive-btn';
-                    toggleBtn.title = 'Click to Activate for Today & generate tick';
-                    toggleBtn.innerHTML = '<i class="fa-solid fa-power-off text-muted"></i> <span class="btn-active-label">Activate</span>';
-                }
-            }
-
-            // 5. Update header Active Today counter badge
+            // Update header Active Today counter badge
             const activeCountEl = document.getElementById('activeCountDisplay');
             if (activeCountEl) {
                 const totalActive = document.querySelectorAll('.unit-worker-row[data-is-active="1"]').length;
@@ -1415,8 +1566,10 @@ async function quickToggleWorkerActive(workerId) {
             }
 
             // Re-apply filter if on active tab
-            if (currentActiveFilter === 'active') {
-                applyWorkersTableFilters();
+            if (typeof currentActiveFilter !== 'undefined' && currentActiveFilter === 'active') {
+                if (typeof applyWorkersTableFilters === 'function') {
+                    applyWorkersTableFilters();
+                }
             }
         } else {
             alert(data.message || 'Failed to update active status.');

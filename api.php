@@ -2852,6 +2852,153 @@ try {
             break;
 
         // ==========================================
+        // GET LIVE WORKER & USER STATUSES (REAL-TIME HEARTBEAT)
+        // ==========================================
+        case 'get_live_worker_statuses':
+            $unitParam = trim($requestData['unit'] ?? '');
+            $includeUsers = isset($requestData['include_users']) ? (int)$requestData['include_users'] : 1;
+            $todayStr = date('Y-m-d');
+
+            $whereSql = "WHERE 1=1";
+            $params = [];
+            if (!empty($unitParam)) {
+                $whereSql .= " AND w.unit = :unit";
+                $params[':unit'] = $unitParam;
+            }
+
+            // 1. Fetch live worker statuses
+            $wStmt = $pdo->prepare("
+                SELECT 
+                    w.id,
+                    w.unique_id,
+                    w.name,
+                    w.unit,
+                    w.role,
+                    w.assigned_work,
+                    w.last_login as worker_last_login,
+                    (SELECT last_login FROM users WHERE LOWER(username) = LOWER(w.unique_id) OR REPLACE(username, '-', '') = REPLACE(w.unique_id, '-', '') OR (LOWER(full_name) = LOWER(w.name) AND NOT EXISTS (SELECT 1 FROM users u_sub WHERE LOWER(u_sub.username) = LOWER(w.unique_id))) LIMIT 1) as user_last_login,
+                    (SELECT GROUP_CONCAT(DISTINCT category_name SEPARATOR ', ') FROM worker_work_assignments WHERE worker_id = w.id AND assigned_date = CURDATE() AND status = 'Active') as today_assigned_cats,
+                    (SELECT category_name FROM worker_work_assignments WHERE worker_id = w.id AND assigned_date = CURDATE() ORDER BY id DESC LIMIT 1) as today_assigned_cat,
+                    (SELECT subcategory_name FROM worker_work_assignments WHERE worker_id = w.id AND assigned_date = CURDATE() ORDER BY id DESC LIMIT 1) as today_assigned_subcat,
+                    (SELECT sub_subcategory_name FROM worker_work_assignments WHERE worker_id = w.id AND assigned_date = CURDATE() ORDER BY id DESC LIMIT 1) as today_assigned_subsub
+                FROM workers w
+                $whereSql
+                ORDER BY w.total_pieces DESC, w.name ASC
+            ");
+            $wStmt->execute($params);
+            $workersRaw = $wStmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $activeCount = 0;
+            $workerList = [];
+
+            foreach ($workersRaw as $w) {
+                $loginCandidates = array_filter([$w['worker_last_login'] ?? null, $w['user_last_login'] ?? null]);
+                $effLogin = null;
+                if (!empty($loginCandidates)) {
+                    rsort($loginCandidates);
+                    $effLogin = $loginCandidates[0];
+                }
+                $isActive = (!empty($effLogin) && date('Y-m-d', strtotime($effLogin)) === $todayStr);
+
+                if ($isActive) {
+                    $activeCount++;
+                }
+
+                $activeWork = '';
+                if (!empty($w['today_assigned_cats'])) {
+                    $activeWork = $w['today_assigned_cats'];
+                } else {
+                    $assignedParts = array_filter([$w['today_assigned_cat'] ?? '', $w['today_assigned_subcat'] ?? '', $w['today_assigned_subsub'] ?? '']);
+                    if (!empty($assignedParts)) {
+                        $activeWork = implode(' - ', $assignedParts);
+                    } else {
+                        $activeWork = !empty($w['assigned_work']) ? $w['assigned_work'] : '';
+                    }
+                }
+
+                $workerList[] = [
+                    'id' => (int)$w['id'],
+                    'unique_id' => $w['unique_id'],
+                    'name' => $w['name'],
+                    'unit' => $w['unit'],
+                    'role' => $w['role'],
+                    'is_active' => $isActive,
+                    'last_login' => $effLogin,
+                    'formatted_time' => ($isActive && !empty($effLogin)) ? date('h:i A', strtotime($effLogin)) : null,
+                    'assigned_work' => $activeWork
+                ];
+            }
+
+            // 2. Fetch live users if requested (for user_details.php)
+            $userList = [];
+            if ($includeUsers) {
+                $uStmt = $pdo->query("
+                    SELECT 
+                        u.id AS user_id,
+                        u.username,
+                        u.full_name,
+                        u.role AS system_role,
+                        u.unit AS user_unit,
+                        COALESCE(u.status, 'Active') AS user_status,
+                        u.last_login AS user_last_login,
+                        w.id AS worker_id,
+                        w.unique_id,
+                        w.name AS worker_name,
+                        w.unit AS worker_unit,
+                        w.last_login AS worker_last_login,
+                        w.assigned_work,
+                        (SELECT GROUP_CONCAT(DISTINCT category_name SEPARATOR ', ') FROM worker_work_assignments WHERE worker_id = w.id AND assigned_date = CURDATE() AND status = 'Active') as today_assigned_cats
+                    FROM users u
+                    LEFT JOIN workers w ON (
+                        LOWER(u.username) = LOWER(w.unique_id) 
+                        OR REPLACE(u.username, '-', '') = REPLACE(w.unique_id, '-', '')
+                        OR (
+                            LOWER(u.full_name) = LOWER(w.name)
+                            AND NOT EXISTS (
+                                SELECT 1 FROM workers w_sub 
+                                WHERE LOWER(w_sub.unique_id) = LOWER(u.username) 
+                                   OR REPLACE(w_sub.unique_id, '-', '') = REPLACE(u.username, '-', '')
+                            )
+                        )
+                    )
+                    ORDER BY u.id ASC
+                ");
+                $allUsersRaw = $uStmt->fetchAll(PDO::FETCH_ASSOC);
+
+                foreach ($allUsersRaw as $u) {
+                    $uLogins = array_filter([$u['worker_last_login'] ?? null, $u['user_last_login'] ?? null]);
+                    $uEffLogin = null;
+                    if (!empty($uLogins)) {
+                        rsort($uLogins);
+                        $uEffLogin = $uLogins[0];
+                    }
+                    $isUserLoggedInToday = (!empty($uEffLogin) && strpos($uEffLogin, $todayStr) === 0);
+
+                    $userList[] = [
+                        'user_id' => (int)$u['user_id'],
+                        'worker_id' => (int)($u['worker_id'] ?? 0),
+                        'username' => $u['username'],
+                        'name' => $u['full_name'] ?: ($u['worker_name'] ?? $u['username']),
+                        'is_logged_in_today' => $isUserLoggedInToday,
+                        'effective_login' => $uEffLogin,
+                        'formatted_time' => ($isUserLoggedInToday && !empty($uEffLogin)) ? date('h:i A', strtotime($uEffLogin)) : null,
+                        'assigned_work' => !empty($u['today_assigned_cats']) ? $u['today_assigned_cats'] : ($u['assigned_work'] ?? '')
+                    ];
+                }
+            }
+
+            echo json_encode([
+                'success' => true,
+                'unit' => $unitParam,
+                'active_count' => $activeCount,
+                'total_count' => count($workerList),
+                'workers' => $workerList,
+                'users' => $userList,
+                'server_time' => date('Y-m-d H:i:s')
+            ]);
+            break;
+
+        // ==========================================
         // DEFAULT FALLBACK
         // ==========================================
         default:
@@ -2866,7 +3013,7 @@ try {
                     'delete_role', 'get_production_units', 'add_production_unit',
                     'delete_production_unit', 'toggle_unit_status', 'edit_production_unit',
                     'update_user_credentials', 'clear_system_data', 'quick_add_user',
-                    'toggle_user_status', 'delete_user_worker'
+                    'toggle_user_status', 'delete_user_worker', 'get_live_worker_statuses'
                 ]
             ]);
             break;

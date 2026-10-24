@@ -126,7 +126,12 @@ foreach ($allUsers as &$u) {
     }
 
     // Effective login detection (from users table or linked workers table)
-    $effLogin = !empty($u['user_last_login']) ? $u['user_last_login'] : (!empty($u['worker_last_login']) ? $u['worker_last_login'] : null);
+    $loginCandidates = array_filter([$u['user_last_login'] ?? null, $u['worker_last_login'] ?? null]);
+    $effLogin = null;
+    if (!empty($loginCandidates)) {
+        rsort($loginCandidates);
+        $effLogin = $loginCandidates[0];
+    }
     $u['effective_login'] = $effLogin;
     $u['is_logged_in_today'] = (!empty($effLogin) && strpos($effLogin, $todayDateString) === 0);
 
@@ -1052,11 +1057,13 @@ include __DIR__ . '/includes/header.php';
                                 <div style="min-width: 0;">
                                     <div class="worker-meta-name" style="font-weight: 700; font-size: 0.92rem; color: #fff; white-space: nowrap; display: flex; align-items: center; gap: 0.35rem;">
                                         <span id="nameText_<?= $userId ?>_<?= $workerId ?>"><?= htmlspecialchars($displayName) ?></span>
-                                        <?php if ($isLoggedInToday): ?>
-                                            <span class="worker-login-tick-badge" id="nameLoginTick_<?= $userId ?>_<?= $workerId ?>" title="Logged in today: <?= !empty($effLogin) ? date('h:i A', strtotime($effLogin)) : 'Today' ?>">
-                                                <i class="fa-solid fa-circle-check"></i>
-                                            </span>
-                                        <?php endif; ?>
+                                        <span class="user-login-tick-container" id="loginTickContainer_<?= $userId ?>_<?= $workerId ?>">
+                                            <?php if ($isLoggedInToday): ?>
+                                                <span class="worker-login-tick-badge" id="nameLoginTick_<?= $userId ?>_<?= $workerId ?>" title="Logged in today: <?= !empty($effLogin) ? date('h:i A', strtotime($effLogin)) : 'Today' ?>">
+                                                    <i class="fa-solid fa-circle-check"></i>
+                                                </span>
+                                            <?php endif; ?>
+                                        </span>
                                     </div>
                                     <div style="display: flex; align-items: center; gap: 0.35rem; margin-top: 0.2rem; flex-wrap: wrap;">
                                         <span class="badge-pill" style="font-family: monospace; font-size: 0.72rem; padding: 0.05rem 0.35rem; background: rgba(6,182,212,0.08); color: var(--accent-cyan); border: 1px solid rgba(6,182,212,0.25);">
@@ -1149,15 +1156,17 @@ include __DIR__ . '/includes/header.php';
                         <td style="text-align: right;">
                             <div class="user-action-group">
                                 <!-- Assign Work Button: ONLY for user logged in today -->
-                                <?php if ($isLoggedInToday): ?>
-                                    <button type="button" 
-                                        class="btn btn-sm btn-assign-work" 
-                                        id="assignWorkBtn_<?= $userId ?>_<?= $workerId ?>"
-                                        onclick="openAssignWorkModal(<?= $workerId ?>, '<?= htmlspecialchars(addslashes($displayName)) ?>', '<?= htmlspecialchars(addslashes($user['username'])) ?>', '<?= htmlspecialchars(addslashes($unitVal)) ?>', '<?= htmlspecialchars(addslashes($designation)) ?>', '<?= htmlspecialchars(addslashes($assignedWork)) ?>', <?= $userId ?>)"
-                                        title="Assign Garment Production Category">
-                                        <i class="fa-solid fa-clipboard-list"></i> Assign Work
-                                    </button>
-                                <?php endif; ?>
+                                <span class="user-assign-work-container" id="assignWorkBtnContainer_<?= $userId ?>_<?= $workerId ?>">
+                                    <?php if ($isLoggedInToday): ?>
+                                        <button type="button" 
+                                            class="btn btn-sm btn-assign-work" 
+                                            id="assignWorkBtn_<?= $userId ?>_<?= $workerId ?>"
+                                            onclick="openAssignWorkModal(<?= $workerId ?>, '<?= htmlspecialchars(addslashes($displayName)) ?>', '<?= htmlspecialchars(addslashes($user['username'])) ?>', '<?= htmlspecialchars(addslashes($unitVal)) ?>', '<?= htmlspecialchars(addslashes($designation)) ?>', '<?= htmlspecialchars(addslashes($assignedWork)) ?>', <?= $userId ?>)"
+                                            title="Assign Garment Production Category">
+                                            <i class="fa-solid fa-clipboard-list"></i> Assign Work
+                                        </button>
+                                    <?php endif; ?>
+                                </span>
 
                                 <!-- 1. View Details Button -->
                                 <button type="button" class="btn-action-view" 
@@ -4167,6 +4176,106 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.target === assignModal) closeAssignWorkModal();
     });
 });
+
+// Real-Time Live Status Updates for Users & Workers Directory
+function applyUserLiveStatusUpdate(u) {
+    if (!u || !u.user_id) return false;
+    const userId = u.user_id;
+    const workerId = u.worker_id || 0;
+    const key = userId + '_' + workerId;
+    const row = document.getElementById('userRow_' + key);
+    if (!row) return false;
+
+    const tickContainer = document.getElementById('loginTickContainer_' + key);
+    const assignContainer = document.getElementById('assignWorkBtnContainer_' + key);
+
+    const isCurrentlyActive = Boolean(document.getElementById('nameLoginTick_' + key));
+    const newActive = Boolean(u.is_logged_in_today);
+
+    let changed = false;
+
+    if (isCurrentlyActive !== newActive) {
+        changed = true;
+        // 1. Update tick
+        if (tickContainer) {
+            if (newActive) {
+                tickContainer.innerHTML = `
+                    <span class="worker-login-tick-badge" id="nameLoginTick_${key}" title="Logged in today: ${u.formatted_time || 'Today'}">
+                        <i class="fa-solid fa-circle-check"></i>
+                    </span>
+                `;
+            } else {
+                tickContainer.innerHTML = '';
+            }
+        }
+
+        // 2. Update assign work button in actions
+        if (assignContainer) {
+            if (newActive) {
+                const uName = (u.name || '').replace(/'/g, "\\'");
+                const uUser = (u.username || '').replace(/'/g, "\\'");
+                const uAssigned = (u.assigned_work || '').replace(/'/g, "\\'");
+                assignContainer.innerHTML = `
+                    <button type="button" 
+                        class="btn btn-sm btn-assign-work" 
+                        id="assignWorkBtn_${key}"
+                        onclick="openAssignWorkModal(${workerId}, '${uName}', '${uUser}', '', '', '${uAssigned}', ${userId})"
+                        title="Assign Garment Production Category">
+                        <i class="fa-solid fa-clipboard-list"></i> Assign Work
+                    </button>
+                `;
+            } else {
+                assignContainer.innerHTML = '';
+            }
+        }
+    }
+
+    return changed;
+}
+
+let liveUserPollTimer = null;
+let isPollingLiveUserStatus = false;
+
+async function checkLiveUserDetailsStatuses() {
+    if (isPollingLiveUserStatus) return;
+    isPollingLiveUserStatus = true;
+
+    try {
+        const res = await fetch('api.php?action=get_live_worker_statuses&include_users=1');
+        if (!res.ok) return;
+        const data = await res.json();
+
+        if (data.success && Array.isArray(data.users)) {
+            data.users.forEach(u => {
+                applyUserLiveStatusUpdate(u);
+            });
+        }
+    } catch (e) {
+    } finally {
+        isPollingLiveUserStatus = false;
+    }
+}
+
+function startLiveUserDetailsPolling() {
+    if (liveUserPollTimer) clearInterval(liveUserPollTimer);
+    liveUserPollTimer = setInterval(() => {
+        if (!document.hidden) {
+            checkLiveUserDetailsStatuses();
+        }
+    }, 3000);
+}
+
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+        checkLiveUserDetailsStatuses();
+    }
+});
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', startLiveUserDetailsPolling);
+} else {
+    startLiveUserDetailsPolling();
+}
 </script>
 
 <?php include __DIR__ . '/includes/footer.php'; ?>
