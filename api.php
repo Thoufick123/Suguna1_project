@@ -2271,19 +2271,21 @@ try {
             // Find current status if not supplied
             $currentStatus = 'Active';
             if ($workerId > 0) {
-                $wStmt = $pdo->prepare("SELECT unique_id, status FROM workers WHERE id = :id");
+                $wStmt = $pdo->prepare("SELECT unique_id, status, last_login FROM workers WHERE id = :id");
                 $wStmt->execute([':id' => $workerId]);
                 $wRow = $wStmt->fetch(PDO::FETCH_ASSOC);
                 if ($wRow) {
-                    $currentStatus = $wRow['status'] ?? 'Active';
+                    $isLogToday = (!empty($wRow['last_login']) && date('Y-m-d', strtotime($wRow['last_login'])) === date('Y-m-d'));
+                    $currentStatus = (($wRow['status'] ?? 'Active') === 'Active' && $isLogToday) ? 'Active' : 'Inactive';
                     if (empty($username)) $username = $wRow['unique_id'];
                 }
             } elseif ($userId > 0) {
-                $uStmt = $pdo->prepare("SELECT username, status FROM users WHERE id = :id");
+                $uStmt = $pdo->prepare("SELECT username, status, last_login FROM users WHERE id = :id");
                 $uStmt->execute([':id' => $userId]);
                 $uRow = $uStmt->fetch(PDO::FETCH_ASSOC);
                 if ($uRow) {
-                    $currentStatus = $uRow['status'] ?? 'Active';
+                    $isLogToday = (!empty($uRow['last_login']) && date('Y-m-d', strtotime($uRow['last_login'])) === date('Y-m-d'));
+                    $currentStatus = (($uRow['status'] ?? 'Active') === 'Active' && $isLogToday) ? 'Active' : 'Inactive';
                     if (empty($username)) $username = $uRow['username'];
                 }
             }
@@ -2294,30 +2296,35 @@ try {
                 $newStatus = (strcasecmp($newStatus, 'Inactive') === 0) ? 'Inactive' : 'Active';
             }
 
+            $now = date('Y-m-d H:i:s');
+            $loginTime = ($newStatus === 'Active') ? $now : null;
+
             // Update workers table
             if ($workerId > 0) {
-                $updW = $pdo->prepare("UPDATE workers SET status = :st WHERE id = :id");
-                $updW->execute([':st' => $newStatus, ':id' => $workerId]);
+                $updW = $pdo->prepare("UPDATE workers SET status = :st, last_login = :ll WHERE id = :id");
+                $updW->execute([':st' => $newStatus, ':ll' => $loginTime, ':id' => $workerId]);
             }
             if (!empty($username)) {
-                $updW2 = $pdo->prepare("UPDATE workers SET status = :st WHERE LOWER(unique_id) = LOWER(:u) OR LOWER(name) = LOWER(:u)");
-                $updW2->execute([':st' => $newStatus, ':u' => $username]);
+                $updW2 = $pdo->prepare("UPDATE workers SET status = :st, last_login = :ll WHERE LOWER(unique_id) = LOWER(:u) OR LOWER(name) = LOWER(:u)");
+                $updW2->execute([':st' => $newStatus, ':ll' => $loginTime, ':u' => $username]);
             }
 
             // Update users table
             if ($userId > 0) {
-                $updU2 = $pdo->prepare("UPDATE users SET status = :st WHERE id = :id");
-                $updU2->execute([':st' => $newStatus, ':id' => $userId]);
+                $updU2 = $pdo->prepare("UPDATE users SET status = :st, last_login = :ll WHERE id = :id");
+                $updU2->execute([':st' => $newStatus, ':ll' => $loginTime, ':id' => $userId]);
             }
             if (!empty($username)) {
-                $updU = $pdo->prepare("UPDATE users SET status = :st WHERE LOWER(username) = LOWER(:u) OR LOWER(full_name) = LOWER(:u)");
-                $updU->execute([':st' => $newStatus, ':u' => $username]);
+                $updU = $pdo->prepare("UPDATE users SET status = :st, last_login = :ll WHERE LOWER(username) = LOWER(:u) OR LOWER(full_name) = LOWER(:u)");
+                $updU->execute([':st' => $newStatus, ':ll' => $loginTime, ':u' => $username]);
             }
 
             echo json_encode([
                 'success' => true,
                 'new_status' => $newStatus,
-                'message' => "User status updated to '$newStatus'."
+                'is_logged_in_today' => ($newStatus === 'Active'),
+                'formatted_time' => ($newStatus === 'Active') ? date('h:i A') : null,
+                'message' => ($newStatus === 'Active') ? "User '$username' is now active for today." : "User '$username' is now marked inactive for today."
             ]);
             break;
 

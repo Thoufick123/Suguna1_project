@@ -135,9 +135,13 @@ foreach ($allUsers as &$u) {
     $u['effective_login'] = $effLogin;
     $u['is_logged_in_today'] = (!empty($effLogin) && strpos($effLogin, $todayDateString) === 0);
 
-    // Active assigned work check
-    if (!empty($u['today_assigned_cats'])) {
+    // Active assigned work check: Only valid if user logged in today!
+    if (!$u['is_logged_in_today']) {
+        $u['assigned_work'] = '';
+    } elseif (!empty($u['today_assigned_cats'])) {
         $u['assigned_work'] = $u['today_assigned_cats'];
+    } elseif (!empty($u['assigned_at']) && strpos($u['assigned_at'], $todayDateString) !== 0) {
+        $u['assigned_work'] = '';
     }
 }
 unset($u);
@@ -989,12 +993,17 @@ include __DIR__ . '/includes/header.php';
                         $userId = (int)$user['user_id'];
                         $workerStatus = !empty($user['worker_status']) ? $user['worker_status'] : 'Active';
                         $userStatus = !empty($user['user_status']) ? $user['user_status'] : 'Active';
-                        $isActive = (strcasecmp($workerStatus, 'Active') === 0 && strcasecmp($userStatus, 'Active') === 0);
+                        $isAccountActive = (strcasecmp($workerStatus, 'Active') === 0 && strcasecmp($userStatus, 'Active') === 0);
                         $isRootAdmin = ($userId === 1 || strcasecmp($user['username'], 'admin') === 0);
                         $uColor = resolveUnitBadgeColor($unitVal);
                         $effLogin = $user['effective_login'] ?? null;
                         $isLoggedInToday = !empty($user['is_logged_in_today']);
-                        $assignedWork = !empty($user['assigned_work']) ? $user['assigned_work'] : '';
+
+                        // Daily Active Rule: Root admin is always active;
+                        // for all factory workers & operators, Active status is strictly based on DAILY LOGIN!
+                        // If not logged in today, their attendance status is Inactive.
+                        $isActive = ($isAccountActive && ($isRootAdmin || $isLoggedInToday));
+                        $assignedWork = ($isActive && !empty($user['assigned_work'])) ? $user['assigned_work'] : '';
 
                         // Avatar gradient per role
                         $avatarBg = 'linear-gradient(135deg, #2563eb, #3b82f6)';
@@ -1044,7 +1053,7 @@ include __DIR__ . '/includes/header.php';
                         data-username="<?= htmlspecialchars(strtolower($user['username'])) ?>"
                         data-role="<?= htmlspecialchars($sRole) ?>"
                         data-unit="<?= htmlspecialchars(strtolower($unitVal)) ?>"
-                        data-status="<?= htmlspecialchars(strtolower($workerStatus)) ?>"
+                        data-status="<?= $isActive ? 'active' : 'inactive' ?>"
                         data-phone="<?= htmlspecialchars(strtolower($phone)) ?>"
                         data-designation="<?= htmlspecialchars(strtolower($designation)) ?>">
                         
@@ -1074,7 +1083,7 @@ include __DIR__ . '/includes/header.php';
                                                 class="badge-pill active-badge-btn <?= $isActive ? 'is-active' : 'is-inactive' ?>"
                                                 id="nameActiveBtn_<?= $userId ?>_<?= $workerId ?>"
                                                 onclick="toggleUserStatus(<?= $userId ?>, <?= $workerId ?>, '<?= htmlspecialchars(addslashes($user['username'])) ?>')"
-                                                title="Status: <?= $isActive ? 'Active' : 'Inactive' ?> (Click to Toggle)"
+                                                title="Today's Attendance: <?= $isActive ? 'Active (Logged In Today)' : 'Inactive (Not Logged In Today)' ?> • Click to Toggle"
                                                 style="cursor: pointer; font-size: 0.7rem; font-weight: 700; padding: 0.1rem 0.5rem; border-radius: 9999px; display: inline-flex; align-items: center; gap: 0.25rem; <?= $isActive ? 'background: rgba(16,185,129,0.18); color: #34d399; border: 1px solid rgba(16,185,129,0.45);' : 'background: rgba(148,163,184,0.12); color: #94a3b8; border: 1px solid rgba(148,163,184,0.25);' ?>">
                                             <i class="fa-solid <?= $isActive ? 'fa-circle-check' : 'fa-circle-xmark' ?>" id="nameActiveIcon_<?= $userId ?>_<?= $workerId ?>"></i>
                                             <span id="nameActiveText_<?= $userId ?>_<?= $workerId ?>"><?= $isActive ? 'ACTIVE' : 'INACTIVE' ?></span>
@@ -1145,7 +1154,7 @@ include __DIR__ . '/includes/header.php';
                                 class="status-pill status-pill-btn status-<?= $isActive ? 'active' : 'inactive' ?>" 
                                 id="statusPill_<?= $userId ?>_<?= $workerId ?>"
                                 onclick="toggleUserStatus(<?= $userId ?>, <?= $workerId ?>, '<?= htmlspecialchars(addslashes($user['username'])) ?>')"
-                                title="Click to toggle Active / Inactive"
+                                title="<?= $isActive ? 'Active Today (Logged In) • Click to Mark Inactive' : 'Inactive Today (Not Logged In) • Click to Activate for Today' ?>"
                                 style="cursor: pointer; border: none; font-size: 0.78rem; font-weight: 600; padding: 0.28rem 0.75rem; border-radius: 9999px; display: inline-flex; align-items: center; gap: 0.35rem; transition: all 0.2s ease;">
                                 <span class="status-indicator-dot"></span>
                                 <span id="statusText_<?= $userId ?>_<?= $workerId ?>"><?= $isActive ? 'Active' : 'Inactive' ?></span>
@@ -1165,6 +1174,10 @@ include __DIR__ . '/includes/header.php';
                                             title="Assign Garment Production Category">
                                             <i class="fa-solid fa-clipboard-list"></i> Assign Work
                                         </button>
+                                    <?php else: ?>
+                                        <span class="badge-pill" id="loginReqBadge_<?= $userId ?>_<?= $workerId ?>" style="font-size: 0.72rem; background: rgba(245,158,11,0.12); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); padding: 0.28rem 0.55rem; display: inline-flex; align-items: center; gap: 0.35rem;" title="Daily login required before work can be assigned">
+                                            <i class="fa-solid fa-user-clock"></i> Login Required
+                                        </span>
                                     <?php endif; ?>
                                 </span>
 
@@ -1218,12 +1231,13 @@ include __DIR__ . '/includes/header.php';
             $userId = (int)$user['user_id'];
             $workerStatus = !empty($user['worker_status']) ? $user['worker_status'] : 'Active';
             $userStatus = !empty($user['user_status']) ? $user['user_status'] : 'Active';
-            $isActive = (strcasecmp($workerStatus, 'Active') === 0 && strcasecmp($userStatus, 'Active') === 0);
             $isRootAdmin = ($userId === 1 || strcasecmp($user['username'], 'admin') === 0);
             $uColor = resolveUnitBadgeColor($unitVal);
             $effLogin = $user['effective_login'] ?? null;
             $isLoggedInToday = !empty($user['is_logged_in_today']);
             $assignedWork = !empty($user['assigned_work']) ? $user['assigned_work'] : '';
+            $isAccountActive = (strcasecmp($workerStatus, 'Active') === 0 && strcasecmp($userStatus, 'Active') === 0);
+            $isActive = ($isAccountActive && ($isRootAdmin || $isLoggedInToday));
 
             $avatarBg = 'linear-gradient(135deg, #2563eb, #3b82f6)';
             if ($sRole === 'admin') $avatarBg = 'linear-gradient(135deg, #9333ea, #c084fc)';
@@ -1263,7 +1277,7 @@ include __DIR__ . '/includes/header.php';
             data-username="<?= htmlspecialchars(strtolower($user['username'])) ?>"
             data-role="<?= htmlspecialchars($sRole) ?>"
             data-unit="<?= htmlspecialchars(strtolower($unitVal)) ?>"
-            data-status="<?= htmlspecialchars(strtolower($workerStatus)) ?>"
+            data-status="<?= $isActive ? 'active' : 'inactive' ?>"
             data-phone="<?= htmlspecialchars(strtolower($phone)) ?>"
             data-designation="<?= htmlspecialchars(strtolower($designation)) ?>">
             
@@ -1275,11 +1289,13 @@ include __DIR__ . '/includes/header.php';
                     <div>
                         <div style="font-weight: 700; font-size: 0.95rem; color: #fff; display: flex; align-items: center; gap: 0.35rem;">
                             <span id="cardNameText_<?= $userId ?>_<?= $workerId ?>"><?= htmlspecialchars($displayName) ?></span>
-                            <?php if ($isLoggedInToday): ?>
-                                <span class="worker-login-tick-badge" id="cardNameLoginTick_<?= $userId ?>_<?= $workerId ?>" title="Logged in today: <?= !empty($effLogin) ? date('h:i A', strtotime($effLogin)) : 'Today' ?>">
-                                    <i class="fa-solid fa-circle-check"></i>
-                                </span>
-                            <?php endif; ?>
+                            <span class="user-login-tick-container" id="cardLoginTickContainer_<?= $userId ?>_<?= $workerId ?>">
+                                <?php if ($isLoggedInToday): ?>
+                                    <span class="worker-login-tick-badge" id="cardNameLoginTick_<?= $userId ?>_<?= $workerId ?>" title="Logged in today: <?= !empty($effLogin) ? date('h:i A', strtotime($effLogin)) : 'Today' ?>">
+                                        <i class="fa-solid fa-circle-check"></i>
+                                    </span>
+                                <?php endif; ?>
+                            </span>
                         </div>
                         <div style="display: flex; align-items: center; gap: 0.35rem; margin-top: 0.2rem; flex-wrap: wrap;">
                             <span style="font-family: monospace; font-size: 0.76rem; color: var(--accent-cyan);">
@@ -1351,15 +1367,21 @@ include __DIR__ . '/includes/header.php';
 
             <div style="display: flex; gap: 0.35rem; justify-content: flex-end; align-items: center; margin-top: auto; padding-top: 0.5rem; flex-wrap: wrap;">
                 <!-- Assign Work Button in Card View: ONLY for user logged in today -->
-                <?php if ($isLoggedInToday): ?>
-                    <button type="button" 
-                        class="btn btn-sm btn-assign-work" 
-                        id="cardAssignWorkBtn_<?= $userId ?>_<?= $workerId ?>"
-                        onclick="openAssignWorkModal(<?= $workerId ?>, '<?= htmlspecialchars(addslashes($displayName)) ?>', '<?= htmlspecialchars(addslashes($user['username'])) ?>', '<?= htmlspecialchars(addslashes($unitVal)) ?>', '<?= htmlspecialchars(addslashes($designation)) ?>', '<?= htmlspecialchars(addslashes($assignedWork)) ?>', <?= $userId ?>)"
-                        title="Assign Garment Production Category">
-                        <i class="fa-solid fa-clipboard-list"></i> Assign Work
-                    </button>
-                <?php endif; ?>
+                <span class="user-assign-work-container" id="cardAssignWorkBtnContainer_<?= $userId ?>_<?= $workerId ?>">
+                    <?php if ($isLoggedInToday): ?>
+                        <button type="button" 
+                            class="btn btn-sm btn-assign-work" 
+                            id="cardAssignWorkBtn_<?= $userId ?>_<?= $workerId ?>"
+                            onclick="openAssignWorkModal(<?= $workerId ?>, '<?= htmlspecialchars(addslashes($displayName)) ?>', '<?= htmlspecialchars(addslashes($user['username'])) ?>', '<?= htmlspecialchars(addslashes($unitVal)) ?>', '<?= htmlspecialchars(addslashes($designation)) ?>', '<?= htmlspecialchars(addslashes($assignedWork)) ?>', <?= $userId ?>)"
+                            title="Assign Garment Production Category">
+                            <i class="fa-solid fa-clipboard-list"></i> Assign Work
+                        </button>
+                    <?php else: ?>
+                        <span class="badge-pill" id="cardLoginReqBadge_<?= $userId ?>_<?= $workerId ?>" style="font-size: 0.72rem; background: rgba(245,158,11,0.12); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); padding: 0.28rem 0.55rem; display: inline-flex; align-items: center; gap: 0.35rem;" title="Daily login required before work can be assigned">
+                            <i class="fa-solid fa-user-clock"></i> Login Required
+                        </span>
+                    <?php endif; ?>
+                </span>
 
                 <!-- 1. View Details Button -->
                 <button type="button" class="btn-action-view" 
@@ -3620,6 +3642,43 @@ async function toggleUserStatus(userId, workerId, username) {
                 nameActiveText.innerText = newStatus.toUpperCase();
             }
 
+            // Update Login Tick & Assign Work Button for Table Row
+            const tickContainer = document.getElementById(`loginTickContainer_${userId}_${workerId}`);
+            if (tickContainer) {
+                if (isAct) {
+                    tickContainer.innerHTML = `
+                        <span class="worker-login-tick-badge" id="nameLoginTick_${userId}_${workerId}" title="Logged in today: ${data.formatted_time || 'Just now'}">
+                            <i class="fa-solid fa-circle-check"></i>
+                        </span>
+                    `;
+                } else {
+                    tickContainer.innerHTML = '';
+                }
+            }
+
+            const assignContainer = document.getElementById(`assignWorkBtnContainer_${userId}_${workerId}`);
+            if (assignContainer) {
+                if (isAct) {
+                    const dispName = (document.getElementById(`nameText_${userId}_${workerId}`)?.innerText || username).replace(/'/g, "\\'");
+                    const uNameSafe = username.replace(/'/g, "\\'");
+                    assignContainer.innerHTML = `
+                        <button type="button" 
+                            class="btn btn-sm btn-assign-work" 
+                            id="assignWorkBtn_${userId}_${workerId}"
+                            onclick="openAssignWorkModal(${workerId}, '${dispName}', '${uNameSafe}', '', '', '', ${userId})"
+                            title="Assign Garment Production Category">
+                            <i class="fa-solid fa-clipboard-list"></i> Assign Work
+                        </button>
+                    `;
+                } else {
+                    assignContainer.innerHTML = `
+                        <span class="badge-pill" id="loginReqBadge_${userId}_${workerId}" style="font-size: 0.72rem; background: rgba(245,158,11,0.12); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); padding: 0.28rem 0.55rem; display: inline-flex; align-items: center; gap: 0.35rem;" title="Daily login required before work can be assigned">
+                            <i class="fa-solid fa-user-clock"></i> Login Required
+                        </span>
+                    `;
+                }
+            }
+
             // 2. Update Card
             const cardToggleIcon = document.getElementById(`cardToggleIcon_${userId}_${workerId}`);
             const cardToggleText = document.getElementById(`cardToggleText_${userId}_${workerId}`);
@@ -3651,6 +3710,43 @@ async function toggleUserStatus(userId, workerId, username) {
                 cardNameActiveBtn.style.border = isAct ? '1px solid rgba(16,185,129,0.45)' : '1px solid rgba(148,163,184,0.25)';
                 cardNameActiveIcon.className = `fa-solid ${isAct ? 'fa-circle-check' : 'fa-circle-xmark'}`;
                 cardNameActiveText.innerText = newStatus.toUpperCase();
+            }
+
+            // Update Login Tick & Assign Work for Card
+            const cardTickContainer = document.getElementById(`cardLoginTickContainer_${userId}_${workerId}`);
+            if (cardTickContainer) {
+                if (isAct) {
+                    cardTickContainer.innerHTML = `
+                        <span class="worker-login-tick-badge" id="cardNameLoginTick_${userId}_${workerId}" title="Logged in today: ${data.formatted_time || 'Just now'}">
+                            <i class="fa-solid fa-circle-check"></i>
+                        </span>
+                    `;
+                } else {
+                    cardTickContainer.innerHTML = '';
+                }
+            }
+
+            const cardAssignContainer = document.getElementById(`cardAssignWorkBtnContainer_${userId}_${workerId}`);
+            if (cardAssignContainer) {
+                if (isAct) {
+                    const dispName = (document.getElementById(`cardNameText_${userId}_${workerId}`)?.innerText || username).replace(/'/g, "\\'");
+                    const uNameSafe = username.replace(/'/g, "\\'");
+                    cardAssignContainer.innerHTML = `
+                        <button type="button" 
+                            class="btn btn-sm btn-assign-work" 
+                            id="cardAssignWorkBtn_${userId}_${workerId}"
+                            onclick="openAssignWorkModal(${workerId}, '${dispName}', '${uNameSafe}', '', '', '', ${userId})"
+                            title="Assign Garment Production Category">
+                            <i class="fa-solid fa-clipboard-list"></i> Assign Work
+                        </button>
+                    `;
+                } else {
+                    cardAssignContainer.innerHTML = `
+                        <span class="badge-pill" id="cardLoginReqBadge_${userId}_${workerId}" style="font-size: 0.72rem; background: rgba(245,158,11,0.12); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); padding: 0.28rem 0.55rem; display: inline-flex; align-items: center; gap: 0.35rem;" title="Daily login required before work can be assigned">
+                            <i class="fa-solid fa-user-clock"></i> Login Required
+                        </span>
+                    `;
+                }
             }
 
             // 3. Update Modal if open
@@ -4186,9 +4282,6 @@ function applyUserLiveStatusUpdate(u) {
     const row = document.getElementById('userRow_' + key);
     if (!row) return false;
 
-    const tickContainer = document.getElementById('loginTickContainer_' + key);
-    const assignContainer = document.getElementById('assignWorkBtnContainer_' + key);
-
     const isCurrentlyActive = Boolean(document.getElementById('nameLoginTick_' + key));
     const newActive = Boolean(u.is_logged_in_today);
 
@@ -4196,7 +4289,52 @@ function applyUserLiveStatusUpdate(u) {
 
     if (isCurrentlyActive !== newActive) {
         changed = true;
-        // 1. Update tick
+
+        // 1. Update row & card data-status
+        row.setAttribute('data-status', newActive ? 'active' : 'inactive');
+        const card = document.getElementById('userCard_' + key);
+        if (card) card.setAttribute('data-status', newActive ? 'active' : 'inactive');
+
+        // 2. Update status pills
+        const statusPill = document.getElementById('statusPill_' + key);
+        const statusText = document.getElementById('statusText_' + key);
+        if (statusPill && statusText) {
+            statusPill.className = `status-pill status-pill-btn status-${newActive ? 'active' : 'inactive'}`;
+            statusText.innerText = newActive ? 'Active' : 'Inactive';
+        }
+        const cardStatusPill = document.getElementById('cardStatusPill_' + key);
+        const cardStatusText = document.getElementById('cardStatusText_' + key);
+        if (cardStatusPill && cardStatusText) {
+            cardStatusPill.className = `status-pill status-${newActive ? 'active' : 'inactive'}`;
+            cardStatusText.innerText = newActive ? 'Active' : 'Inactive';
+        }
+
+        // 3. Update active badge button
+        const nameActiveBtn = document.getElementById('nameActiveBtn_' + key);
+        const nameActiveText = document.getElementById('nameActiveText_' + key);
+        const nameActiveIcon = document.getElementById('nameActiveIcon_' + key);
+        if (nameActiveBtn && nameActiveText && nameActiveIcon) {
+            nameActiveBtn.className = `badge-pill active-badge-btn ${newActive ? 'is-active' : 'is-inactive'}`;
+            nameActiveBtn.style.background = newActive ? 'rgba(16,185,129,0.18)' : 'rgba(148,163,184,0.12)';
+            nameActiveBtn.style.color = newActive ? '#34d399' : '#94a3b8';
+            nameActiveBtn.style.border = newActive ? '1px solid rgba(16,185,129,0.45)' : '1px solid rgba(148,163,184,0.25)';
+            nameActiveIcon.className = `fa-solid ${newActive ? 'fa-circle-check' : 'fa-circle-xmark'}`;
+            nameActiveText.innerText = newActive ? 'ACTIVE' : 'INACTIVE';
+        }
+        const cardNameActiveBtn = document.getElementById('cardNameActiveBtn_' + key);
+        const cardNameActiveText = document.getElementById('cardNameActiveText_' + key);
+        const cardNameActiveIcon = document.getElementById('cardNameActiveIcon_' + key);
+        if (cardNameActiveBtn && cardNameActiveText && cardNameActiveIcon) {
+            cardNameActiveBtn.className = `badge-pill active-badge-btn ${newActive ? 'is-active' : 'is-inactive'}`;
+            cardNameActiveBtn.style.background = newActive ? 'rgba(16,185,129,0.18)' : 'rgba(148,163,184,0.12)';
+            cardNameActiveBtn.style.color = newActive ? '#34d399' : '#94a3b8';
+            cardNameActiveBtn.style.border = newActive ? '1px solid rgba(16,185,129,0.45)' : '1px solid rgba(148,163,184,0.25)';
+            cardNameActiveIcon.className = `fa-solid ${newActive ? 'fa-circle-check' : 'fa-circle-xmark'}`;
+            cardNameActiveText.innerText = newActive ? 'ACTIVE' : 'INACTIVE';
+        }
+
+        // 4. Update login ticks
+        const tickContainer = document.getElementById('loginTickContainer_' + key);
         if (tickContainer) {
             if (newActive) {
                 tickContainer.innerHTML = `
@@ -4208,8 +4346,21 @@ function applyUserLiveStatusUpdate(u) {
                 tickContainer.innerHTML = '';
             }
         }
+        const cardTickContainer = document.getElementById('cardLoginTickContainer_' + key);
+        if (cardTickContainer) {
+            if (newActive) {
+                cardTickContainer.innerHTML = `
+                    <span class="worker-login-tick-badge" id="cardNameLoginTick_${key}" title="Logged in today: ${u.formatted_time || 'Today'}">
+                        <i class="fa-solid fa-circle-check"></i>
+                    </span>
+                `;
+            } else {
+                cardTickContainer.innerHTML = '';
+            }
+        }
 
-        // 2. Update assign work button in actions
+        // 5. Update assign work button vs Login Required badge in Table
+        const assignContainer = document.getElementById('assignWorkBtnContainer_' + key);
         if (assignContainer) {
             if (newActive) {
                 const uName = (u.name || '').replace(/'/g, "\\'");
@@ -4225,7 +4376,36 @@ function applyUserLiveStatusUpdate(u) {
                     </button>
                 `;
             } else {
-                assignContainer.innerHTML = '';
+                assignContainer.innerHTML = `
+                    <span class="badge-pill" id="loginReqBadge_${key}" style="font-size: 0.72rem; background: rgba(245,158,11,0.12); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); padding: 0.28rem 0.55rem; display: inline-flex; align-items: center; gap: 0.35rem;" title="Daily login required before work can be assigned">
+                        <i class="fa-solid fa-user-clock"></i> Login Required
+                    </span>
+                `;
+            }
+        }
+
+        // 6. Update assign work button vs Login Required badge in Card
+        const cardAssignContainer = document.getElementById('cardAssignWorkBtnContainer_' + key);
+        if (cardAssignContainer) {
+            if (newActive) {
+                const uName = (u.name || '').replace(/'/g, "\\'");
+                const uUser = (u.username || '').replace(/'/g, "\\'");
+                const uAssigned = (u.assigned_work || '').replace(/'/g, "\\'");
+                cardAssignContainer.innerHTML = `
+                    <button type="button" 
+                        class="btn btn-sm btn-assign-work" 
+                        id="cardAssignWorkBtn_${key}"
+                        onclick="openAssignWorkModal(${workerId}, '${uName}', '${uUser}', '', '', '${uAssigned}', ${userId})"
+                        title="Assign Garment Production Category">
+                        <i class="fa-solid fa-clipboard-list"></i> Assign Work
+                    </button>
+                `;
+            } else {
+                cardAssignContainer.innerHTML = `
+                    <span class="badge-pill" id="cardLoginReqBadge_${key}" style="font-size: 0.72rem; background: rgba(245,158,11,0.12); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); padding: 0.28rem 0.55rem; display: inline-flex; align-items: center; gap: 0.35rem;" title="Daily login required before work can be assigned">
+                        <i class="fa-solid fa-user-clock"></i> Login Required
+                    </span>
+                `;
             }
         }
     }

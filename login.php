@@ -586,6 +586,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <label style="display: flex; align-items: center; gap: 0.4rem; cursor: pointer; color: var(--text-secondary);">
                             <input type="checkbox" name="remember" style="accent-color: var(--primary);"> Remember Me
                         </label>
+                        <a href="javascript:void(0)" onclick="openResetModal()" style="color: var(--accent-cyan, #06b6d4); text-decoration: none; font-weight: 600; font-size: 0.78rem; transition: all 0.2s;">
+                            <i class="fa-solid fa-key" style="font-size: 0.72rem;"></i> Forgot Password?
+                        </a>
                     </div>
 
                     <button type="submit" id="loginSubmitBtn" class="btn btn-primary" style="width: 100%;">
@@ -593,6 +596,61 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     </button>
                 </form>
             </div>
+        </div>
+    </div>
+
+    <!-- Forgot / Reset Password Modal -->
+    <div id="resetPasswordModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); z-index: 9999; align-items: center; justify-content: center; padding: 1.5rem;">
+        <div style="width: 100%; max-width: 380px; background: var(--bg-card, #1e293b); border: 1px solid var(--border-color, rgba(255,255,255,0.1)); border-radius: var(--radius-lg, 1rem); padding: 1.75rem; box-shadow: 0 20px 40px rgba(0,0,0,0.6); position: relative;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem;">
+                <h3 style="margin: 0; font-size: 1.15rem; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 0.5rem;">
+                    <i class="fa-solid fa-key" style="color: var(--accent-cyan, #06b6d4);"></i> Reset Password
+                </h3>
+                <button type="button" onclick="closeResetModal()" style="background: none; border: none; color: var(--text-muted, #94a3b8); font-size: 1.1rem; cursor: pointer; padding: 0.25rem;">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <div id="resetAlertBox" class="alert-box alert-danger" style="display: none; margin-bottom: 1rem;">
+                <i class="fa-solid fa-circle-exclamation" id="resetAlertIcon"></i>
+                <span id="resetAlertMessage"></span>
+            </div>
+
+            <form id="ajaxResetPasswordForm" autocomplete="off">
+                <input type="hidden" name="ajax" value="1">
+                <input type="hidden" name="action" value="set_password">
+
+                <div class="form-group" style="margin-bottom: 1rem;">
+                    <label class="form-label" for="resetUsernameInput" style="font-size: 0.82rem; font-weight: 600; color: #cbd5e1; display: block; margin-bottom: 0.35rem;">
+                        <i class="fa-solid fa-id-badge text-cyan"></i> Username, Emp ID or Name <span style="color: #f43f5e;">*</span>
+                    </label>
+                    <input type="text" id="resetUsernameInput" name="username" class="form-control" placeholder="e.g. PU001-4 or sugi" required style="width: 100%; padding: 0.65rem 0.85rem; background: rgba(15,23,42,0.6); border: 1px solid rgba(255,255,255,0.12); border-radius: var(--radius-md, 0.5rem); color: #fff; font-size: 0.88rem;">
+                </div>
+
+                <div class="form-group" style="margin-bottom: 0.75rem;">
+                    <label class="form-label" for="resetPasswordInput" style="font-size: 0.82rem; font-weight: 600; color: #cbd5e1; display: block; margin-bottom: 0.35rem;">
+                        <i class="fa-solid fa-lock text-cyan"></i> New Password (4 to 6 chars) <span style="color: #f43f5e;">*</span>
+                    </label>
+                    <div class="password-field-wrapper" style="position: relative;">
+                        <input type="password" id="resetPasswordInput" name="password" class="form-control" placeholder="4 - 6 characters" minlength="4" maxlength="6" required style="width: 100%; padding: 0.65rem 2.5rem 0.65rem 0.85rem; background: rgba(15,23,42,0.6); border: 1px solid rgba(255,255,255,0.12); border-radius: var(--radius-md, 0.5rem); color: #fff; font-size: 0.88rem;">
+                        <button type="button" class="password-toggle-btn" onclick="togglePassVisibility('resetPasswordInput', 'resetEyeIcon')" title="Show / Hide Password" style="position: absolute; right: 0.75rem; top: 50%; transform: translateY(-50%); background: none; border: none; color: #94a3b8; cursor: pointer;">
+                            <i class="fa-solid fa-eye" id="resetEyeIcon"></i>
+                        </button>
+                    </div>
+                    <small id="resetPassHelp" style="color: var(--text-muted, #94a3b8); font-size: 0.72rem; display: block; margin-top: 0.25rem;">
+                        Password must be 4 to 6 characters long.
+                    </small>
+                </div>
+
+                <div style="display: flex; gap: 0.5rem; margin-top: 1.25rem;">
+                    <button type="button" onclick="closeResetModal()" class="btn btn-secondary" style="flex: 1; padding: 0.65rem; background: rgba(148,163,184,0.15); border: 1px solid rgba(148,163,184,0.25); border-radius: var(--radius-md, 0.5rem); color: #cbd5e1; font-weight: 600; cursor: pointer;">
+                        Cancel
+                    </button>
+                    <button type="submit" id="resetSubmitBtn" class="btn btn-primary" style="flex: 2; padding: 0.65rem; background: var(--primary, #2563eb); border: none; border-radius: var(--radius-md, 0.5rem); color: #fff; font-weight: 600; cursor: pointer;">
+                        <span id="resetBtnText"><i class="fa-solid fa-floppy-disk"></i> Save New Password</span>
+                    </button>
+                </div>
+            </form>
         </div>
     </div>
 
@@ -703,6 +761,78 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     submitBtn.disabled = false;
                     btnText.innerText = 'Sign In to Dashboard';
+                }
+            });
+        }
+
+        // Reset Password Modal Functions
+        function openResetModal() {
+            const modal = document.getElementById('resetPasswordModal');
+            const alertBox = document.getElementById('resetAlertBox');
+            if (alertBox) alertBox.style.display = 'none';
+            const form = document.getElementById('ajaxResetPasswordForm');
+            if (form) form.reset();
+            const currUser = document.getElementById('loginUsernameInput')?.value;
+            if (currUser && document.getElementById('resetUsernameInput')) {
+                document.getElementById('resetUsernameInput').value = currUser;
+            }
+            if (modal) modal.style.display = 'flex';
+        }
+
+        function closeResetModal() {
+            const modal = document.getElementById('resetPasswordModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        const resetForm = document.getElementById('ajaxResetPasswordForm');
+        const resetSubmitBtn = document.getElementById('resetSubmitBtn');
+        const resetBtnText = document.getElementById('resetBtnText');
+        const resetAlertBox = document.getElementById('resetAlertBox');
+        const resetAlertMessage = document.getElementById('resetAlertMessage');
+        const resetAlertIcon = document.getElementById('resetAlertIcon');
+
+        if (resetForm) {
+            resetForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                resetSubmitBtn.disabled = true;
+                resetBtnText.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+                resetAlertBox.style.display = 'none';
+
+                const formData = new FormData(resetForm);
+                try {
+                    const res = await fetch('login.php', {
+                        method: 'POST',
+                        body: formData,
+                        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                        closeResetModal();
+                        // Show success alert in main login card
+                        alertBox.className = 'alert-box alert-success';
+                        alertIcon.className = 'fa-solid fa-circle-check';
+                        alertMessage.innerText = data.message || 'Password successfully updated! Please sign in.';
+                        alertBox.style.display = 'flex';
+
+                        // Pre-fill username and password in main form
+                        const uVal = document.getElementById('resetUsernameInput')?.value || '';
+                        const pVal = document.getElementById('resetPasswordInput')?.value || '';
+                        if (document.getElementById('loginUsernameInput')) document.getElementById('loginUsernameInput').value = uVal;
+                        if (document.getElementById('loginPasswordInput')) document.getElementById('loginPasswordInput').value = pVal;
+                    } else {
+                        resetAlertBox.className = 'alert-box alert-danger';
+                        resetAlertIcon.className = 'fa-solid fa-circle-exclamation';
+                        resetAlertMessage.innerText = data.message || 'Failed to reset password.';
+                        resetAlertBox.style.display = 'flex';
+                    }
+                } catch (err) {
+                    resetAlertBox.className = 'alert-box alert-danger';
+                    resetAlertIcon.className = 'fa-solid fa-circle-exclamation';
+                    resetAlertMessage.innerText = 'Network error: ' + err.message;
+                    resetAlertBox.style.display = 'flex';
+                } finally {
+                    resetSubmitBtn.disabled = false;
+                    resetBtnText.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save New Password';
                 }
             });
         }
