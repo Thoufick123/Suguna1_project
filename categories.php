@@ -60,89 +60,13 @@ include __DIR__ . '/includes/header.php';
     </div>
 </div>
 
-<!-- Admin Workstation Cooldown Setting Card -->
-<div class="card mb-4" style="border: 1px dashed rgba(245, 158, 11, 0.4); background: linear-gradient(180deg, rgba(245, 158, 11, 0.05) 0%, rgba(18, 24, 38, 0.6) 100%);">
-    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; padding: 1rem 1.25rem;">
-        <div style="display: flex; align-items: center; gap: 0.75rem;">
-            <div style="width: 42px; height: 42px; border-radius: 10px; background: rgba(245, 158, 11, 0.15); color: #fbbf24; display: flex; align-items: center; justify-content: center; font-size: 1.2rem;">
-                <i class="fa-solid fa-stopwatch"></i>
-            </div>
-            <div>
-                <h3 style="font-size: 0.95rem; font-weight: 700; color: #fff; margin: 0; display: flex; align-items: center; gap: 0.45rem;">
-                    Complete Button Waiting Time (Workstation Cooldown)
-                    <span class="badge-pill" style="font-size: 0.7rem; background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4);">Admin Setting</span>
-                </h3>
-                <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.2rem 0 0 0;">
-                    Controls how many seconds operators must wait between consecutive piece completions in Today's Clothes.
-                </p>
-            </div>
-        </div>
-        <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
-            <span style="font-size: 0.78rem; color: var(--text-secondary); font-weight: 600;">Current: <strong id="catCurrentCooldownVal" class="text-amber"><?= $cooldownSec ?>s</strong></span>
-            
-            <button type="button" class="btn btn-xs btn-outline cat-cooldown-preset" data-sec="0" title="Instant (0s)">0s</button>
-            <button type="button" class="btn btn-xs btn-outline cat-cooldown-preset" data-sec="5">5s</button>
-            <button type="button" class="btn btn-xs btn-outline cat-cooldown-preset" data-sec="10">10s</button>
-            <button type="button" class="btn btn-xs btn-outline cat-cooldown-preset" data-sec="15">15s</button>
-            <button type="button" class="btn btn-xs btn-outline cat-cooldown-preset" data-sec="30">30s</button>
-            <button type="button" class="btn btn-xs btn-outline cat-cooldown-preset" data-sec="60">60s</button>
+<!-- Floating Action Button for Instant Mobile Creation -->
+<button type="button" id="mobileCatFabBtn" class="mobile-cat-fab" title="Create New Category" aria-label="Create New Category">
+    <i class="fa-solid fa-plus"></i>
+</button>
 
-            <div style="display: inline-flex; align-items: center; background: rgba(0,0,0,0.35); border: 1px solid var(--border-color); border-radius: 6px; padding: 2px 6px;">
-                <button type="button" id="catDecCooldownBtn" style="background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 2px 5px;"><i class="fa-solid fa-minus" style="font-size: 0.7rem;"></i></button>
-                <input type="number" id="catCooldownInput" value="<?= $cooldownSec ?>" min="0" max="600" step="1" style="width: 50px; background: transparent; border: none; text-align: center; color: #fff; font-size: 0.85rem; font-weight: 700; outline: none;">
-                <span style="font-size: 0.75rem; color: var(--text-muted); margin-right: 4px;">sec</span>
-                <button type="button" id="catIncCooldownBtn" style="background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 2px 5px;"><i class="fa-solid fa-plus" style="font-size: 0.7rem;"></i></button>
-            </div>
-
-            <button type="button" id="catSaveCooldownBtn" class="btn btn-sm btn-primary" style="background: linear-gradient(135deg, #f59e0b, #d97706); border: none; color: #000; font-weight: 700; padding: 0.35rem 0.85rem;">
-                <i class="fa-solid fa-check"></i> Save Time
-            </button>
-        </div>
-    </div>
-</div>
-
-<!-- Stats Counter -->
-<div class="stats-grid stats-grid-4 mb-4">
-    <div class="stat-card">
-        <div class="stat-icon primary">
-            <i class="fa-solid fa-folder"></i>
-        </div>
-        <div class="stat-info">
-            <span class="stat-label">All Categories</span>
-            <span class="stat-value" id="statsCatCount"><?= $totalCategories ?></span>
-        </div>
-    </div>
-    <div class="stat-card">
-        <div class="stat-icon warning">
-            <i class="fa-solid fa-folder-tree"></i>
-        </div>
-        <div class="stat-info">
-            <span class="stat-label">All Subcategories</span>
-            <span class="stat-value" id="statsSubcatCount"><?= $totalSubcategories ?></span>
-        </div>
-    </div>
-    <div class="stat-card">
-        <div class="stat-icon success">
-            <i class="fa-solid fa-circle-check"></i>
-        </div>
-        <div class="stat-info">
-            <span class="stat-label">Active in Workstation</span>
-            <span class="stat-value" id="statsActiveCatCount"><?= $totalActiveCategories ?></span>
-        </div>
-    </div>
-    <div class="stat-card">
-        <div class="stat-icon" style="background: rgba(168,85,247,0.15); color: #c084fc;">
-            <i class="fa-solid fa-tags"></i>
-        </div>
-        <div class="stat-info">
-            <span class="stat-label">Garment Definitions</span>
-            <span class="stat-value" id="statsItemCount"><?= $totalGarmentTypes ?></span>
-        </div>
-    </div>
-</div>
-
-<!-- Collapsible Add New Category / Subcategory Form Card -->
-<div class="card mb-4" id="addGarmentCard" style="display: none; border: 1px solid rgba(6,182,212,0.3); background: rgba(15,23,42,0.85); box-shadow: 0 8px 24px rgba(0,0,0,0.35);">
+<!-- Collapsible Add New Category / Subcategory Form Card (Prominently at the Top) -->
+<div class="card mb-4" id="addGarmentCard" style="display: none; border: 1px solid rgba(6,182,212,0.4); background: rgba(15,23,42,0.95); box-shadow: 0 12px 32px rgba(0,0,0,0.45);">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 0.75rem; flex-wrap: wrap; gap: 0.65rem;">
         <div style="min-width: 0; flex: 1 1 auto;">
             <div style="font-weight: 700; font-size: 1.05rem; color: var(--text-primary); display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap; word-break: break-word;">
@@ -219,6 +143,89 @@ include __DIR__ . '/includes/header.php';
         <div id="pageFormAlert" style="display: none; padding: 0.65rem 0.9rem; border-radius: var(--radius-sm); font-size: 0.82rem; margin-top: 0.85rem;"></div>
     </form>
 </div>
+
+<!-- Stats Counter -->
+<div class="stats-grid stats-grid-4 mb-4">
+    <div class="stat-card">
+        <div class="stat-icon primary">
+            <i class="fa-solid fa-folder"></i>
+        </div>
+        <div class="stat-info">
+            <span class="stat-label">All Categories</span>
+            <span class="stat-value" id="statsCatCount"><?= $totalCategories ?></span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon warning">
+            <i class="fa-solid fa-folder-tree"></i>
+        </div>
+        <div class="stat-info">
+            <span class="stat-label">All Subcategories</span>
+            <span class="stat-value" id="statsSubcatCount"><?= $totalSubcategories ?></span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon success">
+            <i class="fa-solid fa-circle-check"></i>
+        </div>
+        <div class="stat-info">
+            <span class="stat-label">Active in Workstation</span>
+            <span class="stat-value" id="statsActiveCatCount"><?= $totalActiveCategories ?></span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon" style="background: rgba(168,85,247,0.15); color: #c084fc;">
+            <i class="fa-solid fa-tags"></i>
+        </div>
+        <div class="stat-info">
+            <span class="stat-label">Garment Definitions</span>
+            <span class="stat-value" id="statsItemCount"><?= $totalGarmentTypes ?></span>
+        </div>
+    </div>
+</div>
+
+<?php if ($currentUser && $currentUser['role'] === 'admin'): ?>
+<!-- Admin Workstation Cooldown Setting Card (Strictly for Administrator) -->
+<div class="card mb-4" style="border: 1px dashed rgba(245, 158, 11, 0.4); background: linear-gradient(180deg, rgba(245, 158, 11, 0.05) 0%, rgba(18, 24, 38, 0.6) 100%);">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; padding: 1rem 1.25rem;">
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+            <div style="width: 42px; height: 42px; border-radius: 10px; background: rgba(245, 158, 11, 0.15); color: #fbbf24; display: flex; align-items: center; justify-content: center; font-size: 1.2rem;">
+                <i class="fa-solid fa-stopwatch"></i>
+            </div>
+            <div>
+                <h3 style="font-size: 0.95rem; font-weight: 700; color: #fff; margin: 0; display: flex; align-items: center; gap: 0.45rem;">
+                    Complete Button Waiting Time (Workstation Cooldown)
+                    <span class="badge-pill" style="font-size: 0.7rem; background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4);">Admin Setting</span>
+                </h3>
+                <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.2rem 0 0 0;">
+                    Controls how many seconds operators must wait between consecutive piece completions in Today's Clothes.
+                </p>
+            </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+            <span style="font-size: 0.78rem; color: var(--text-secondary); font-weight: 600;">Current: <strong id="catCurrentCooldownVal" class="text-amber"><?= $cooldownSec ?>s</strong></span>
+            
+            <button type="button" class="btn btn-xs btn-outline cat-cooldown-preset" data-sec="0" title="Instant (0s)">0s</button>
+            <button type="button" class="btn btn-xs btn-outline cat-cooldown-preset" data-sec="5">5s</button>
+            <button type="button" class="btn btn-xs btn-outline cat-cooldown-preset" data-sec="10">10s</button>
+            <button type="button" class="btn btn-xs btn-outline cat-cooldown-preset" data-sec="15">15s</button>
+            <button type="button" class="btn btn-xs btn-outline cat-cooldown-preset" data-sec="30">30s</button>
+            <button type="button" class="btn btn-xs btn-outline cat-cooldown-preset" data-sec="60">60s</button>
+
+            <div style="display: inline-flex; align-items: center; background: rgba(0,0,0,0.35); border: 1px solid var(--border-color); border-radius: 6px; padding: 2px 6px;">
+                <button type="button" id="catDecCooldownBtn" style="background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 2px 5px;"><i class="fa-solid fa-minus" style="font-size: 0.7rem;"></i></button>
+                <input type="number" id="catCooldownInput" value="<?= $cooldownSec ?>" min="0" max="600" step="1" style="width: 50px; background: transparent; border: none; text-align: center; color: #fff; font-size: 0.85rem; font-weight: 700; outline: none;">
+                <span style="font-size: 0.75rem; color: var(--text-muted); margin-right: 4px;">sec</span>
+                <button type="button" id="catIncCooldownBtn" style="background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 2px 5px;"><i class="fa-solid fa-plus" style="font-size: 0.7rem;"></i></button>
+            </div>
+
+            <button type="button" id="catSaveCooldownBtn" class="btn btn-sm btn-primary" style="background: linear-gradient(135deg, #f59e0b, #d97706); border: none; color: #000; font-weight: 700; padding: 0.35rem 0.85rem;">
+                <i class="fa-solid fa-check"></i> Save Time
+            </button>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
 
 <!-- ============================================================= -->
 <!-- SPLIT SCREEN: ALL CATEGORIES (LEFT) vs ACTIVE CATEGORIES (RIGHT) -->
@@ -312,6 +319,21 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+
+    const mobileCatFabBtn = document.getElementById('mobileCatFabBtn');
+    if (mobileCatFabBtn && addGarmentCard) {
+        mobileCatFabBtn.addEventListener('click', () => {
+            addGarmentCard.style.display = 'block';
+            if (toggleAddText) {
+                toggleAddText.innerText = 'Hide Add Form';
+            }
+            if (catInput) {
+                catInput.focus();
+            }
+            addGarmentCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+    }
+
     if (btnCloseAddCard && addGarmentCard) {
         btnCloseAddCard.addEventListener('click', () => {
             addGarmentCard.style.display = 'none';

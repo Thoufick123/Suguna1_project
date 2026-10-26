@@ -24,7 +24,14 @@
                 <span><?= ($footerUser && ($footerUser['role'] === 'admin' || $footerUser['role'] === 'supervisor')) ? "Today" : "My Stitches" ?></span>
             </a>
             <?php if ($footerUser && ($footerUser['role'] === 'admin' || $footerUser['role'] === 'supervisor')): ?>
-                <a href="unit_workers.php?unit=Unit+1" class="mobile-nav-item <?= ($curPage === 'unit_workers') ? 'active' : '' ?>">
+                <a href="categories.php" class="mobile-nav-item <?= ($curPage === 'categories') ? 'active' : '' ?>" title="Garment Categories">
+                    <i class="fa-solid fa-layer-group"></i>
+                    <span>Categories</span>
+                </a>
+                <?php
+                $footerUnitTarget = (!empty($footerUser['unit']) && $footerUser['unit'] !== 'All') ? urlencode($footerUser['unit']) : 'Unit+1';
+                ?>
+                <a href="unit_workers.php?unit=<?= $footerUnitTarget ?>" class="mobile-nav-item <?= ($curPage === 'unit_workers') ? 'active' : '' ?>">
                     <i class="fa-solid fa-building-user"></i>
                     <span>Units</span>
                 </a>
@@ -36,11 +43,6 @@
             <a href="leaderboard.php" class="mobile-nav-item <?= ($curPage === 'leaderboard') ? 'active' : '' ?>">
                 <i class="fa-solid fa-trophy"></i>
                 <span>Ranks</span>
-            </a>
-
-            <a href="logout.php" class="mobile-nav-item" title="Sign out">
-                <i class="fa-solid fa-right-from-bracket"></i>
-                <span>Logout</span>
             </a>
         </nav>
 

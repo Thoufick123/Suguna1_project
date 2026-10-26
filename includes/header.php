@@ -134,6 +134,12 @@ if ($currentPage === 'index') $currentPage = 'register';
                                         <span>My Stitched Clothes</span>
                                     </a>
                                 <?php endif; ?>
+                                <?php if ($currentUser && ($currentUser['role'] === 'admin' || $currentUser['role'] === 'supervisor')): ?>
+                                    <a href="categories.php" class="user-dropdown-item">
+                                        <i class="fa-solid fa-layer-group text-cyan"></i>
+                                        <span>Garment Categories</span>
+                                    </a>
+                                <?php endif; ?>
                                 <a href="user_details.php" class="user-dropdown-item">
                                     <i class="fa-solid fa-address-card text-emerald"></i>
                                     <span>User Directory &amp; Accounts</span>
@@ -162,6 +168,11 @@ if ($currentPage === 'index') $currentPage = 'register';
                         <i class="fa-solid fa-right-from-bracket"></i>
                         <span>Logout</span>
                     </a>
+
+                    <!-- 3. Mobile Navigation Menu Toggle Button -->
+                    <button type="button" class="mobile-menu-toggle-btn" id="mobileMenuToggleBtn" aria-label="Open Navigation Menu" title="Open Navigation Menu">
+                        <i class="fa-solid fa-bars"></i>
+                    </button>
                 </div>
             </div>
 
@@ -186,6 +197,28 @@ if ($currentPage === 'index') $currentPage = 'register';
                     });
                 }
 
+                // Mobile Menu Drawer Controller
+                const menuBtn = document.getElementById('mobileMenuToggleBtn');
+                const drawer = document.getElementById('mobileNavDrawer');
+                const drawerBackdrop = document.getElementById('mobileDrawerBackdrop');
+                const closeDrawerBtn = document.getElementById('closeMobileDrawerBtn');
+
+                function openMobileDrawer() {
+                    if (drawer) drawer.classList.add('open');
+                    if (drawerBackdrop) drawerBackdrop.classList.add('open');
+                    document.body.style.overflow = 'hidden';
+                }
+
+                function closeMobileDrawer() {
+                    if (drawer) drawer.classList.remove('open');
+                    if (drawerBackdrop) drawerBackdrop.classList.remove('open');
+                    document.body.style.overflow = '';
+                }
+
+                if (menuBtn) menuBtn.addEventListener('click', openMobileDrawer);
+                if (closeDrawerBtn) closeDrawerBtn.addEventListener('click', closeMobileDrawer);
+                if (drawerBackdrop) drawerBackdrop.addEventListener('click', closeMobileDrawer);
+
                 // Close menus when clicking outside
                 document.addEventListener('click', function(e) {
                     if (pWrap && !pWrap.contains(e.target)) {
@@ -199,6 +232,7 @@ if ($currentPage === 'index') $currentPage = 'register';
                     if (e.key === 'Escape') {
                         if (pWrap) pWrap.classList.remove('open');
                         closeLogoutModal();
+                        closeMobileDrawer();
                     }
                 });
             });
@@ -236,6 +270,104 @@ if ($currentPage === 'index') $currentPage = 'register';
             });
             </script>
         </header>
+
+        <!-- Mobile Navigation Drawer Backdrop -->
+        <div id="mobileDrawerBackdrop" class="mobile-drawer-backdrop"></div>
+
+        <!-- Mobile Slide-Out Navigation Drawer -->
+        <aside id="mobileNavDrawer" class="mobile-nav-drawer" aria-label="Mobile Navigation Menu">
+            <div class="drawer-header">
+                <div class="drawer-user-card">
+                    <div class="drawer-user-avatar">
+                        <?= strtoupper(substr($currentUser['full_name'] ?? $currentUser['username'] ?? 'U', 0, 1)) ?>
+                    </div>
+                    <div class="drawer-user-details">
+                        <div class="drawer-user-name"><?= htmlspecialchars($currentUser['full_name'] ?? $currentUser['username']) ?></div>
+                        <div class="drawer-user-meta">
+                            <span class="user-dropdown-role-badge role-<?= strtolower($currentUser['role'] ?? 'operator') ?>">
+                                <?= htmlspecialchars(ucfirst($currentUser['role'] ?? 'Operator')) ?>
+                            </span>
+                            <?php if (!empty($currentUser['unit']) && $currentUser['unit'] !== 'All'): ?>
+                                <span class="drawer-unit-badge"><i class="fa-solid fa-building-user"></i> <?= htmlspecialchars($currentUser['unit']) ?></span>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+                <button type="button" class="drawer-close-btn" id="closeMobileDrawerBtn" aria-label="Close menu">&times;</button>
+            </div>
+
+            <!-- Quick Action for Categories if Supervisor/Admin -->
+            <?php if ($currentUser && in_array($currentUser['role'], ['admin', 'supervisor'])): ?>
+                <div class="drawer-quick-action">
+                    <a href="categories.php" class="btn btn-primary btn-sm drawer-quick-btn">
+                        <i class="fa-solid fa-circle-plus"></i>
+                        <span>Create / Manage Categories</span>
+                    </a>
+                </div>
+            <?php endif; ?>
+
+            <div class="drawer-links-scroll">
+                <div class="drawer-nav-group-title">Navigation</div>
+                <nav class="drawer-nav-list">
+                    <?php if ($currentUser && in_array($currentUser['role'], ['admin', 'supervisor'])): ?>
+                        <a href="dashboard.php" class="drawer-nav-link <?= ($currentPage === 'dashboard') ? 'active' : '' ?>">
+                            <i class="fa-solid fa-gauge-high text-cyan"></i>
+                            <span>Production Dashboard</span>
+                        </a>
+                    <?php endif; ?>
+
+                    <a href="<?= $navStitchedUrl ?>" class="drawer-nav-link <?= ($currentPage === 'daily_output') ? 'active' : '' ?>">
+                        <i class="fa-solid fa-shirt text-emerald"></i>
+                        <span><?= (in_array($currentUser['role'], ['admin', 'supervisor'])) ? "Today's Clothes / Workstation" : "My Stitched Clothes" ?></span>
+                    </a>
+
+                    <?php if ($currentUser && in_array($currentUser['role'], ['admin', 'supervisor'])): ?>
+                        <a href="categories.php" class="drawer-nav-link <?= ($currentPage === 'categories') ? 'active' : '' ?>" style="border-left: 3px solid var(--accent-cyan, #06b6d4);">
+                            <i class="fa-solid fa-layer-group text-cyan"></i>
+                            <span style="font-weight: 700;">Garment Categories</span>
+                            <span class="badge-pill unit-cyan-pill" style="margin-left: auto; font-size: 0.65rem;">Manage</span>
+                        </a>
+
+                        <?php
+                        $drawerUnitTarget = (!empty($currentUser['unit']) && $currentUser['unit'] !== 'All') ? urlencode($currentUser['unit']) : 'Unit+1';
+                        ?>
+                        <a href="unit_workers.php?unit=<?= $drawerUnitTarget ?>" class="drawer-nav-link <?= ($currentPage === 'unit_workers') ? 'active' : '' ?>">
+                            <i class="fa-solid fa-building-user text-amber"></i>
+                            <span>Production Units (<?= htmlspecialchars($currentUser['unit'] ?? 'Units') ?>)</span>
+                        </a>
+
+                        <a href="index.php" class="drawer-nav-link <?= ($currentPage === 'register') ? 'active' : '' ?>">
+                            <i class="fa-solid fa-user-plus text-cyan"></i>
+                            <span>Register New Worker</span>
+                        </a>
+
+                        <a href="user_details.php" class="drawer-nav-link <?= ($currentPage === 'user_details') ? 'active' : '' ?>">
+                            <i class="fa-solid fa-address-card text-emerald"></i>
+                            <span>User Details &amp; Directory</span>
+                        </a>
+
+                        <a href="arduino.php" class="drawer-nav-link <?= ($currentPage === 'arduino') ? 'active' : '' ?>">
+                            <i class="fa-solid fa-microchip text-cyan"></i>
+                            <span>Arduino IoT Sensor</span>
+                        </a>
+                    <?php endif; ?>
+
+                    <a href="leaderboard.php" class="drawer-nav-link <?= ($currentPage === 'leaderboard') ? 'active' : '' ?>">
+                        <i class="fa-solid fa-trophy text-amber"></i>
+                        <span>Live Production Leaderboard</span>
+                    </a>
+                </nav>
+
+                <div class="drawer-divider"></div>
+
+                <div class="drawer-footer-actions">
+                    <a href="logout.php" class="drawer-logout-btn" onclick="openLogoutModal(event)">
+                        <i class="fa-solid fa-right-from-bracket"></i>
+                        <span>Sign Out of Session</span>
+                    </a>
+                </div>
+            </div>
+        </aside>
 
         <!-- Global Fullscreen Logout Confirmation Modal (Outside header for clean viewport positioning) -->
         <div id="logoutConfirmModal" class="logout-modal-backdrop">

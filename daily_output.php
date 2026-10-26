@@ -317,8 +317,8 @@ $catPalette = [
 ];
 $palIdx = 0;
 
-// User role check (operator/worker or non-admin)
-$isUserRole = ($currentUser && $currentUser['role'] !== 'admin');
+// User role check (operator/worker only - supervisors and admins have full management access)
+$isUserRole = ($currentUser && $currentUser['role'] === 'operator');
 
 // Check whether selected worker logged in today
 $isWorkerLoggedInToday = false;
@@ -1203,7 +1203,7 @@ function filterWorkersByUnit(unitName) {
                         </button>
                     </div>
                 </div>
-                <div id="inlineQuickAddCatForm" style="display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 0.65rem; align-items: end;">
+                <div id="inlineQuickAddCatForm" class="inline-quick-add-grid">
                     <div>
                         <label style="font-size: 0.74rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.2rem;">
                             1. Category Name <span class="required" style="color: var(--accent-rose);">*</span>
