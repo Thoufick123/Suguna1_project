@@ -180,7 +180,9 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
         'Shift',
         'Worker ID',
         'Worker Name',
-        'Production Unit',
+        'Stitching Unit',
+        'Worker Origin / Home Unit',
+        'Unit Shift / Transition Event',
         'Worker Designation',
         'Garment / Material Name',
         'Pieces Stitched',
@@ -189,7 +191,10 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
     ]);
 
     $csvStmt = $pdo->prepare("
-        SELECT pl.id, pl.work_date, pl.shift, w.unique_id, w.name, COALESCE(NULLIF(pl.unit, ''), w.unit) as unit, w.role,
+        SELECT pl.id, pl.work_date, pl.shift, w.unique_id, w.name, 
+               COALESCE(NULLIF(pl.unit, ''), w.unit) as unit, 
+               COALESCE(NULLIF(w.origin_unit, ''), w.unit) as origin_unit,
+               w.transferred_from, w.transfer_type, w.role,
                pl.material_name, pl.piece_count, pl.created_at, pl.notes
         FROM piece_logs pl
         JOIN workers w ON w.id = pl.worker_id
@@ -204,6 +209,14 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
     while ($r = $csvStmt->fetch(PDO::FETCH_ASSOC)) {
         $totalExportRows++;
         $totalExportPieces += (int)$r['piece_count'];
+
+        $unitEvent = "Active in {$r['unit']}";
+        if (!empty($r['transferred_from']) && $r['unit'] !== $r['transferred_from']) {
+            $unitEvent = "Shifted to {$r['unit']} (from {$r['transferred_from']})";
+        } elseif (!empty($r['origin_unit']) && $r['unit'] !== $r['origin_unit']) {
+            $unitEvent = "Shifted to {$r['unit']} (Origin: {$r['origin_unit']})";
+        }
+
         fputcsv($out, [
             $r['id'],
             $r['work_date'],
@@ -211,6 +224,8 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
             $r['unique_id'],
             $r['name'],
             $r['unit'],
+            $r['origin_unit'] ?: $r['unit'],
+            $unitEvent,
             $r['role'] ?: 'Operator',
             $r['material_name'],
             (int)$r['piece_count'],
@@ -1620,6 +1635,7 @@ body.theme-light .quick-dock-item {
     <div class="dash-header-actions">
 
         <!-- Export CSV Button -->
+  
         <a href="<?= htmlspecialchars($exportUrl) ?>" class="btn-action-success" title="Download Complete Production History for this Period as CSV / Excel">
             <i class="fa-solid fa-file-arrow-down"></i>
             <span>Export CSV (<?= number_format($periodPieces) ?> pcs)</span>

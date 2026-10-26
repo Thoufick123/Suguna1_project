@@ -2428,6 +2428,30 @@ try {
                 $updU2->execute([':unit' => $canonicalUnit, ':id' => $userId]);
             }
 
+            // Record transfer history event
+            try {
+                $targetWorkerId = $workerId;
+                if ($targetWorkerId <= 0 && !empty($username)) {
+                    $wGet = $pdo->prepare("SELECT id FROM workers WHERE LOWER(unique_id) = LOWER(:u)");
+                    $wGet->execute([':u' => $username]);
+                    $targetWorkerId = (int)$wGet->fetchColumn();
+                }
+                if ($targetWorkerId > 0) {
+                    $insTr = $pdo->prepare("
+                        INSERT INTO worker_unit_transfers (worker_id, from_unit, to_unit, transfer_date, transfer_type, notes)
+                        VALUES (:wid, :from_unit, :to_unit, :tdate, :ttype, :notes)
+                    ");
+                    $insTr->execute([
+                        ':wid' => $targetWorkerId,
+                        ':from_unit' => $oldUnit,
+                        ':to_unit' => $canonicalUnit,
+                        ':tdate' => date('Y-m-d'),
+                        ':ttype' => $transferType,
+                        ':notes' => $notes ?: 'Transferred via User Management'
+                    ]);
+                }
+            } catch (Exception $e) {}
+
             $transferDesc = ($transferType === 'permanent') ? 'Permanent Assignment' : 'Emergency Temporary Support';
             $auditMsg = "Transferred from {$oldUnit} to {$canonicalUnit} ({$transferDesc}). " . ($notes ? "Reason: {$notes}" : "");
 

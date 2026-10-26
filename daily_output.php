@@ -81,12 +81,60 @@ if ($selectedWorkerId > 0) {
 // CSV EXPORT ENGINE FOR OPERATOR / WORKER COMPLETE OR DATE-RANGE HISTORY
 // =========================================================================
 if (isset($_GET['export']) && $_GET['export'] === 'csv' && $worker) {
+    $preset    = trim($_GET['preset'] ?? '');
     $startDate = trim($_GET['start_date'] ?? '');
     $endDate   = trim($_GET['end_date'] ?? '');
 
+    $todayObj = new DateTime();
+    $todayStr = $todayObj->format('Y-m-d');
+
+    // Handle presets if passed
+    if (!empty($preset)) {
+        if ($preset === 'today') {
+            $startDate = $todayStr;
+            $endDate   = $todayStr;
+            $periodLabel = "Today ({$todayStr})";
+        } elseif ($preset === 'yesterday') {
+            $yDate = (clone $todayObj)->modify('-1 day')->format('Y-m-d');
+            $startDate = $yDate;
+            $endDate   = $yDate;
+            $periodLabel = "Yesterday ({$yDate})";
+        } elseif ($preset === 'this_month') {
+            $startDate = $todayObj->format('Y-m-01');
+            $endDate   = $todayStr;
+            $periodLabel = "This Month ({$startDate} to {$endDate})";
+        } elseif ($preset === 'last_month') {
+            $startDate = (clone $todayObj)->modify('first day of last month')->format('Y-m-d');
+            $endDate   = (clone $todayObj)->modify('last day of last month')->format('Y-m-d');
+            $periodLabel = "Last Month ({$startDate} to {$endDate})";
+        } elseif ($preset === 'last_2_months') {
+            $startDate = (clone $todayObj)->modify('first day of -1 month')->format('Y-m-d');
+            $endDate   = $todayStr;
+            $periodLabel = "Last 2 Months ({$startDate} to {$endDate})";
+        } elseif ($preset === 'last_3_months') {
+            $startDate = (clone $todayObj)->modify('first day of -2 months')->format('Y-m-d');
+            $endDate   = $todayStr;
+            $periodLabel = "Last 3 Months / Quarter ({$startDate} to {$endDate})";
+        } elseif ($preset === '1_year' || $preset === 'this_year') {
+            $startDate = $todayObj->format('Y-01-01');
+            $endDate   = $todayStr;
+            $periodLabel = "Year " . $todayObj->format('Y') . " ({$startDate} to {$endDate})";
+        } elseif ($preset === 'last_12_months') {
+            $startDate = (clone $todayObj)->modify('-1 year')->format('Y-m-d');
+            $endDate   = $todayStr;
+            $periodLabel = "Last 12 Months ({$startDate} to {$endDate})";
+        } elseif ($preset === 'all_time') {
+            $startDate = '';
+            $endDate   = '';
+            $periodLabel = "All Time (Complete Production History)";
+        }
+    }
+
     $dateConditions = "";
     $params = [':wid' => $worker['id']];
-    $periodLabel = "All Time (Whole History)";
+    if (empty($periodLabel)) {
+        $periodLabel = "All Time (Whole History)";
+    }
 
     if (!empty($startDate) && !empty($endDate)) {
         if ($startDate > $endDate) {
@@ -97,7 +145,9 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv' && $worker) {
         $dateConditions = " AND pl.work_date >= :start_date AND pl.work_date <= :end_date ";
         $params[':start_date'] = $startDate;
         $params[':end_date']   = $endDate;
-        $periodLabel = "From {$startDate} to {$endDate}";
+        if (empty($preset) || $preset === 'custom') {
+            $periodLabel = "Custom Date Range ({$startDate} to {$endDate})";
+        }
     } elseif (!empty($startDate)) {
         $dateConditions = " AND pl.work_date >= :start_date ";
         $params[':start_date'] = $startDate;
@@ -111,7 +161,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv' && $worker) {
     $safeName = preg_replace('/[^a-zA-Z0-9_-]/', '_', strtolower($worker['name']));
     $safeUid  = preg_replace('/[^a-zA-Z0-9_-]/', '_', strtolower($worker['unique_id']));
     $rangeSlug = (!empty($startDate) && !empty($endDate)) ? "{$startDate}_to_{$endDate}" : ((!empty($startDate)) ? "from_{$startDate}" : "all_time");
-    $filename = "fabriqpro_history_{$safeUid}_{$safeName}_{$rangeSlug}_" . date('His') . ".csv";
+    $filename = "fabriqpro_history_{$safeUid}_{$safeName}_{$rangeSlug}_" . date('Ymd_His') . ".csv";
 
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="' . $filename . '"');
@@ -119,17 +169,155 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv' && $worker) {
     header('Expires: 0');
 
     $out = fopen('php://output', 'w');
-    // UTF-8 BOM for Microsoft Excel compatibility
+    // UTF-8 BOM for Microsoft Excel & Google Sheets compatibility
     fputs($out, "\xEF\xBB\xBF");
 
-    // CSV Headers
+    // =========================================================================
+    // DYNAMIC UNIT TRANSITION & SHIFT TIMELINE ANALYSIS
+    // =========================================================================
+    // Fetch all logs for this worker chronologically to detect unit switches
+    $historyStmt = $pdo->prepare("
+        SELECT id, work_date, COALESCE(NULLIF(unit, ''), :w_unit) as unit, piece_count
+        FROM piece_logs
+        WHERE worker_id = :wid
+        ORDER BY work_date ASC, id ASC
+    ");
+    $historyStmt->execute([':w_unit' => $worker['unit'], ':wid' => $worker['id']]);
+    $chronologicalLogs = $historyStmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Also check worker_unit_transfers table
+    $dbTransfers = [];
+    try {
+        $trStmt = $pdo->prepare("
+            SELECT from_unit, to_unit, transfer_date, transfer_type, notes
+            FROM worker_unit_transfers
+            WHERE worker_id = :wid
+            ORDER BY transfer_date ASC, id ASC
+        ");
+        $trStmt->execute([':wid' => $worker['id']]);
+        $dbTransfers = $trStmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+
+    // Build timeline of unit transitions & per-unit totals
+    $unitTransitions = []; // [ 'YYYY-MM-DD' => [ 'date' => '...', 'from' => '...', 'to' => '...', 'desc' => '...' ] ]
+    $unitPieceTotals = [];
+    $unitDateSpans   = [];
+    $lastSeenUnit    = null;
+
+    foreach ($chronologicalLogs as $clog) {
+        $u = trim($clog['unit']) ?: 'Unit 1';
+        $d = $clog['work_date'];
+        $c = (int)$clog['piece_count'];
+
+        $unitPieceTotals[$u] = ($unitPieceTotals[$u] ?? 0) + $c;
+
+        if (!isset($unitDateSpans[$u])) {
+            $unitDateSpans[$u] = ['start' => $d, 'end' => $d];
+        } else {
+            $unitDateSpans[$u]['end'] = $d;
+        }
+
+        if ($lastSeenUnit !== null && $lastSeenUnit !== $u) {
+            $unitTransitions[$d] = [
+                'date' => $d,
+                'from_unit' => $lastSeenUnit,
+                'to_unit' => $u,
+                'source' => 'Production Log Transition',
+                'description' => "Shifted from {$lastSeenUnit} to {$u} on {$d}"
+            ];
+        }
+        $lastSeenUnit = $u;
+    }
+
+    // Merge in formal transfers from worker_unit_transfers
+    foreach ($dbTransfers as $dtr) {
+        $tDate = $dtr['transfer_date'];
+        $unitTransitions[$tDate] = [
+            'date' => $tDate,
+            'from_unit' => $dtr['from_unit'],
+            'to_unit' => $dtr['to_unit'],
+            'source' => 'System Transfer Record',
+            'description' => "Shifted from {$dtr['from_unit']} to {$dtr['to_unit']} on {$tDate} (" . ($dtr['transfer_type'] ?: 'Permanent Transfer') . ")"
+        ];
+    }
+
+    // Merge in worker profile transfer metadata
+    if (!empty($worker['transferred_from']) && !empty($worker['origin_unit']) && $worker['transferred_from'] !== $worker['unit']) {
+        $profDate = !empty($worker['updated_at']) ? date('Y-m-d', strtotime($worker['updated_at'])) : date('Y-m-d');
+        if (!isset($unitTransitions[$profDate])) {
+            $unitTransitions[$profDate] = [
+                'date' => $profDate,
+                'from_unit' => $worker['transferred_from'],
+                'to_unit' => $worker['unit'],
+                'source' => 'Worker Profile Update',
+                'description' => "Shifted from {$worker['transferred_from']} to {$worker['unit']} on {$profDate} (" . ($worker['transfer_type'] ?: 'Permanent Transfer') . ")"
+            ];
+        }
+    }
+
+    // Sort transitions chronologically
+    ksort($unitTransitions);
+
+    // =========================================================================
+    // WRITE CSV CONTENT
+    // =========================================================================
+    // 1. Report Header & Worker Details
+    fputcsv($out, ['FABRIQPRO PRODUCTION HISTORY & UNIT SHIFT REPORT']);
+    fputcsv($out, ['Worker Name:', $worker['name'], 'Worker ID / Emp ID:', $worker['unique_id'], 'Designation:', $worker['role'] ?: 'Master Tailor']);
+    
+    $transferStatusStr = !empty($worker['transferred_from']) 
+        ? "Shifted from {$worker['transferred_from']} to {$worker['unit']} (Origin Unit: " . ($worker['origin_unit'] ?: $worker['transferred_from']) . ")"
+        : "Stationed in {$worker['unit']}";
+    fputcsv($out, ['Current Unit:', $worker['unit'], 'Origin / Initial Unit:', $worker['origin_unit'] ?: $worker['unit'], 'Transfer Status:', $transferStatusStr]);
+    fputcsv($out, ['Report Period:', $periodLabel, 'Exported On:', date('Y-m-d H:i:s')]);
+    fputcsv($out, []);
+
+    // 2. Unit Transition & Shift Timeline Block
+    fputcsv($out, ['========================================================================================']);
+    fputcsv($out, ['WORKER UNIT SHIFT & MOVEMENT TIMELINE (EXACT DATE OF UNIT CHANGE)']);
+    fputcsv($out, ['========================================================================================']);
+    
+    if (!empty($unitTransitions)) {
+        fputcsv($out, ['Transition Event #', 'Transition Date', 'Previous Unit', 'New Unit Shifted To', 'Unit Movement Summary', 'Detection Source']);
+        $tIdx = 1;
+        foreach ($unitTransitions as $tDate => $trInfo) {
+            fputcsv($out, [
+                "Event #{$tIdx}",
+                $trInfo['date'],
+                $trInfo['from_unit'],
+                $trInfo['to_unit'],
+                $trInfo['description'],
+                $trInfo['source']
+            ]);
+            $tIdx++;
+        }
+    } else {
+        fputcsv($out, ['No unit transfers recorded. Worker has consistently operated in: ' . $worker['unit']]);
+    }
+    
+    if (!empty($unitDateSpans)) {
+        fputcsv($out, []);
+        fputcsv($out, ['Unit Breakdown Summary:', 'First Active Date', 'Last Active Date', 'Total Pieces Stitched in Unit']);
+        foreach ($unitDateSpans as $uName => $uSpan) {
+            fputcsv($out, [
+                $uName,
+                $uSpan['start'],
+                $uSpan['end'],
+                number_format($unitPieceTotals[$uName] ?? 0) . ' pcs'
+            ]);
+        }
+    }
+    fputcsv($out, []);
+
+    // 3. Table Column Headers for Line Items
     fputcsv($out, [
         'Log ID',
         'Work Date',
         'Shift',
         'Worker ID',
         'Worker Name',
-        'Production Unit',
+        'Stitching Unit',
+        'Unit Shift / Transition Event',
         'Role / Designation',
         'Garment / Subcategory Stitched',
         'Pieces Stitched',
@@ -137,6 +325,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv' && $worker) {
         'Notes'
     ]);
 
+    // 4. Fetch and Write Line Items
     $csvStmt = $pdo->prepare("
         SELECT pl.id, pl.work_date, pl.shift, w.unique_id, w.name, 
                COALESCE(NULLIF(pl.unit, ''), w.unit) as unit, w.role,
@@ -150,10 +339,31 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv' && $worker) {
 
     $totalExportPieces = 0;
     $totalExportRows   = 0;
+    $filteredUnitTotals = [];
 
     while ($r = $csvStmt->fetch(PDO::FETCH_ASSOC)) {
         $totalExportRows++;
-        $totalExportPieces += (int)$r['piece_count'];
+        $pCount = (int)$r['piece_count'];
+        $totalExportPieces += $pCount;
+        $rowUnit = $r['unit'] ?: 'Unit 1';
+        $filteredUnitTotals[$rowUnit] = ($filteredUnitTotals[$rowUnit] ?? 0) + $pCount;
+
+        // Determine Unit Transition label for this row
+        $unitEvent = "";
+        if (isset($unitTransitions[$r['work_date']])) {
+            $tr = $unitTransitions[$r['work_date']];
+            if ($r['unit'] === $tr['to_unit']) {
+                $unitEvent = "*** SHIFTED TO {$tr['to_unit']} ON {$r['work_date']} (from {$tr['from_unit']}) ***";
+            }
+        }
+        if (empty($unitEvent)) {
+            if ($r['unit'] === $worker['unit']) {
+                $unitEvent = "Operating in Current Unit ({$r['unit']})";
+            } else {
+                $unitEvent = "Logged in Prior Unit ({$r['unit']})";
+            }
+        }
+
         fputcsv($out, [
             $r['id'],
             $r['work_date'],
@@ -161,16 +371,20 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv' && $worker) {
             $r['unique_id'],
             $r['name'],
             $r['unit'],
+            $unitEvent,
             $r['role'] ?: 'Operator',
             $r['material_name'],
-            (int)$r['piece_count'],
+            $pCount,
             $r['created_at'],
             $r['notes'] ?: ''
         ]);
     }
 
-    // Blank row & Totals Summary
+    // 5. Blank row & Totals Summary
     fputcsv($out, []);
+    fputcsv($out, ['========================================================================================']);
+    fputcsv($out, ['CONSOLIDATED TOTALS SUMMARY']);
+    fputcsv($out, ['========================================================================================']);
     fputcsv($out, [
         'TOTAL SUMMARY',
         "Records: {$totalExportRows}",
@@ -179,11 +393,27 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv' && $worker) {
         $worker['name'],
         $worker['unit'],
         $worker['role'],
-        'TOTAL PIECES:',
+        'CONSOLIDATED PIECES:',
         $totalExportPieces,
         date('Y-m-d H:i:s'),
         "Period: {$periodLabel}"
     ]);
+
+    foreach ($filteredUnitTotals as $uName => $uPieces) {
+        fputcsv($out, [
+            "  -> {$uName} Subtotal:",
+            number_format($uPieces) . " pcs",
+            '',
+            '',
+            '',
+            $uName,
+            'Subtotal in Unit',
+            '',
+            $uPieces,
+            '',
+            ''
+        ]);
+    }
 
     fclose($out);
     exit;
@@ -1070,17 +1300,17 @@ function filterWorkersByUnit(unitName) {
         <div class="uf-actions-right">
             <!-- Today / Yesterday Date Switch -->
             <div class="date-toggle-group">
-                <a href="daily_output.php?worker_id=<?= $selectedWorkerId ?>&unit=<?= urlencode($activeUnit) ?>&date=<?= date('Y-m-d') ?>" class="btn btn-outline btn-sm <?= ($selectedDate === date('Y-m-d')) ? 'btn-primary' : '' ?>" style="padding: 0.28rem 0.65rem; font-size: 0.78rem;">
-                    Today
+                <a href="daily_output.php?worker_id=<?= $selectedWorkerId ?>&unit=<?= urlencode($activeUnit) ?>&date=<?= date('Y-m-d') ?>" class="btn btn-outline btn-sm <?= ($selectedDate === date('Y-m-d')) ? 'btn-primary' : '' ?>" style="padding: 0.28rem 0.65rem; font-size: 0.78rem;" title="View Today's workstation (<?= date('M d') ?>)">
+                    <i class="fa-solid fa-calendar-day"></i> Today
                 </a>
-                <a href="daily_output.php?worker_id=<?= $selectedWorkerId ?>&unit=<?= urlencode($activeUnit) ?>&date=<?= date('Y-m-d', strtotime('-1 day')) ?>" class="btn btn-outline btn-sm <?= ($selectedDate === date('Y-m-d', strtotime('-1 day'))) ? 'btn-primary' : '' ?>" style="padding: 0.28rem 0.65rem; font-size: 0.78rem;">
-                    Yesterday
+                <a href="daily_output.php?worker_id=<?= $selectedWorkerId ?>&unit=<?= urlencode($activeUnit) ?>&date=<?= date('Y-m-d', strtotime('-1 day')) ?>" class="btn btn-outline btn-sm <?= ($selectedDate === date('Y-m-d', strtotime('-1 day'))) ? 'btn-primary' : '' ?>" style="padding: 0.28rem 0.65rem; font-size: 0.78rem;" title="View Yesterday's workstation (<?= date('M d', strtotime('-1 day')) ?>)">
+                    <i class="fa-solid fa-clock-rotate-left"></i> Yesterday
                 </a>
             </div>
 
-            <!-- Download User History Button (Opens Month-wise & Date Range Modal) -->
-            <button type="button" class="btn btn-outline btn-sm" onclick="openDownloadHistoryModal()" style="padding: 0.28rem 0.65rem; font-size: 0.78rem; border-color: rgba(16,185,129,0.45); color: #34d399; background: rgba(16,185,129,0.08); font-weight: 700; display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer;" title="Download stitching history month-wise or by date range">
-                <i class="fa-solid fa-file-arrow-down"></i> Download History
+            <!-- Download User History Button (Opens Month-wise, 2-3 Months, 1 Year & Date Range Modal) -->
+            <button type="button" class="btn btn-outline btn-sm" onclick="openDownloadHistoryModal()" style="padding: 0.28rem 0.75rem; font-size: 0.78rem; border-color: rgba(16,185,129,0.55); color: #34d399; background: rgba(16,185,129,0.12); font-weight: 700; display: inline-flex; align-items: center; gap: 0.4rem; cursor: pointer; box-shadow: 0 2px 8px rgba(16,185,129,0.2);" title="Download full month, 2-3 months, 1 year or custom range in a single sheet">
+                <i class="fa-solid fa-file-excel text-emerald"></i> Download History (Month / 2-3 Mo / 1 Yr)
             </button>
         </div>
     </div>
@@ -3289,6 +3519,24 @@ document.addEventListener('DOMContentLoaded', () => {
 </div>
 <?php endif; ?>
 
+<style>
+.preset-grid-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.45rem;
+}
+@media (max-width: 480px) {
+    .preset-grid-row {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    .custom-range-header {
+        flex-direction: column;
+        align-items: flex-start !important;
+        gap: 0.35rem;
+    }
+}
+</style>
+
 <!-- Modal: Month-Wise & Date-Range Stitching History Download -->
 <div id="downloadHistoryModal" class="modal-overlay" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 9999; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
     <div class="modal-container" style="background: var(--card-bg, #1e293b); border: 1px solid var(--border-color, #334155); border-radius: var(--radius-lg, 12px); width: 92%; max-width: 520px; max-height: 90vh; overflow-y: auto; padding: 1.5rem; box-shadow: 0 20px 40px rgba(0,0,0,0.5);">
@@ -3309,32 +3557,66 @@ document.addEventListener('DOMContentLoaded', () => {
         <form method="GET" action="daily_output.php" id="downloadHistoryForm" style="display: flex; flex-direction: column; gap: 1rem;">
             <input type="hidden" name="worker_id" value="<?= (int)$selectedWorkerId ?>">
             <input type="hidden" name="export" value="csv">
+            <input type="hidden" name="preset" id="exportPresetInput" value="this_month">
 
-            <!-- Month & Period Quick Presets -->
+            <!-- Month & Period Quick Presets (Single-Sheet Multi-Month & 1-Year Downloads) -->
             <div>
-                <label style="display: block; font-size: 0.8rem; font-weight: 700; margin-bottom: 0.45rem; color: var(--text-secondary);">
-                    Select Month or Preset:
+                <label style="display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; font-weight: 700; margin-bottom: 0.45rem; color: var(--text-secondary); flex-wrap: wrap; gap: 0.3rem;">
+                    <span><i class="fa-solid fa-bolt text-amber"></i> Quick Presets (Single Consolidated Sheet):</span>
+                    <span class="text-cyan" style="font-size: 0.72rem; font-weight: 600;">1 Sheet for All Selected Months / Year</span>
                 </label>
-                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.45rem;">
-                    <button type="button" class="btn btn-outline btn-sm preset-btn active" id="presetThisMonth" onclick="setExportPreset('this_month')" style="padding: 0.4rem 0.3rem; font-size: 0.75rem; font-weight: 700;">This Month</button>
-                    <button type="button" class="btn btn-outline btn-sm preset-btn" id="presetLastMonth" onclick="setExportPreset('last_month')" style="padding: 0.4rem 0.3rem; font-size: 0.75rem; font-weight: 700;">Last Month</button>
-                    <button type="button" class="btn btn-outline btn-sm preset-btn" id="presetToday" onclick="setExportPreset('today')" style="padding: 0.4rem 0.3rem; font-size: 0.75rem; font-weight: 700;">Today</button>
-                    <button type="button" class="btn btn-outline btn-sm preset-btn" id="presetAllTime" onclick="setExportPreset('all_time')" style="padding: 0.4rem 0.3rem; font-size: 0.75rem; font-weight: 700;">All Time</button>
+                <!-- Row 1: Daily & Single Month Presets -->
+                <div class="preset-grid-row" style="margin-bottom: 0.45rem;">
+                    <button type="button" class="btn btn-outline btn-sm preset-btn" id="presetToday" onclick="setExportPreset('today')" style="padding: 0.42rem 0.25rem; font-size: 0.74rem; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 0.3rem;">
+                        <i class="fa-solid fa-calendar-day text-cyan" style="font-size: 0.7rem;"></i> Today
+                    </button>
+                    <button type="button" class="btn btn-outline btn-sm preset-btn" id="presetYesterday" onclick="setExportPreset('yesterday')" style="padding: 0.42rem 0.25rem; font-size: 0.74rem; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 0.3rem;">
+                        <i class="fa-solid fa-clock-rotate-left text-amber" style="font-size: 0.7rem;"></i> Yesterday
+                    </button>
+                    <button type="button" class="btn btn-outline btn-sm preset-btn active" id="presetThisMonth" onclick="setExportPreset('this_month')" style="padding: 0.42rem 0.25rem; font-size: 0.74rem; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 0.3rem;">
+                        <i class="fa-solid fa-calendar-days text-emerald" style="font-size: 0.7rem;"></i> This Month
+                    </button>
+                    <button type="button" class="btn btn-outline btn-sm preset-btn" id="presetLastMonth" onclick="setExportPreset('last_month')" style="padding: 0.42rem 0.25rem; font-size: 0.74rem; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 0.3rem;">
+                        <i class="fa-solid fa-calendar text-purple" style="font-size: 0.7rem;"></i> Last Month
+                    </button>
+                </div>
+                <!-- Row 2: Multi-Month (2-3 Months), 1 Year & All Time Presets -->
+                <div class="preset-grid-row">
+                    <button type="button" class="btn btn-outline btn-sm preset-btn" id="presetLast2Months" onclick="setExportPreset('last_2_months')" style="padding: 0.42rem 0.25rem; font-size: 0.74rem; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 0.3rem;">
+                        <i class="fa-solid fa-calendar-week text-cyan" style="font-size: 0.7rem;"></i> 2 Months
+                    </button>
+                    <button type="button" class="btn btn-outline btn-sm preset-btn" id="presetLast3Months" onclick="setExportPreset('last_3_months')" style="padding: 0.42rem 0.25rem; font-size: 0.74rem; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 0.3rem;">
+                        <i class="fa-solid fa-layer-group text-pink" style="font-size: 0.7rem;"></i> 3 Months
+                    </button>
+                    <button type="button" class="btn btn-outline btn-sm preset-btn" id="preset1Year" onclick="setExportPreset('1_year')" style="padding: 0.42rem 0.25rem; font-size: 0.74rem; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 0.3rem;">
+                        <i class="fa-solid fa-calendar-check text-amber" style="font-size: 0.7rem;"></i> 1 Year
+                    </button>
+                    <button type="button" class="btn btn-outline btn-sm preset-btn" id="presetAllTime" onclick="setExportPreset('all_time')" style="padding: 0.42rem 0.25rem; font-size: 0.74rem; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 0.3rem;">
+                        <i class="fa-solid fa-infinity text-emerald" style="font-size: 0.7rem;"></i> All Time
+                    </button>
                 </div>
             </div>
 
             <!-- Custom Start Date & End Date Inputs with Interactive Validation -->
             <div style="background: rgba(255, 255, 255, 0.02); padding: 0.85rem; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
+                <div class="custom-range-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
+                    <span style="font-size: 0.78rem; font-weight: 700; color: var(--text-secondary);">
+                        <i class="fa-regular fa-calendar-range text-cyan"></i> Custom Date Range (Or pick above):
+                    </span>
+                    <span id="exportLiveRangeBadge" class="badge-pill" style="font-size: 0.68rem; padding: 0.15rem 0.5rem; background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.35); text-align: right; word-break: break-word;">
+                        This Month
+                    </span>
+                </div>
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
                     <div>
-                        <label for="exportStartDate" style="display: block; font-size: 0.78rem; font-weight: 600; margin-bottom: 0.35rem; color: var(--text-secondary);">
-                            <i class="fa-regular fa-calendar text-cyan"></i> Start Date:
+                        <label for="exportStartDate" style="display: block; font-size: 0.74rem; font-weight: 600; margin-bottom: 0.25rem; color: var(--text-muted);">
+                            Start Date:
                         </label>
                         <input type="date" id="exportStartDate" name="start_date" class="form-control" style="font-size: 0.85rem; padding: 0.45rem 0.65rem;" onchange="validateExportDateRange('start')" oninput="validateExportDateRange('start')">
                     </div>
                     <div>
-                        <label for="exportEndDate" style="display: block; font-size: 0.78rem; font-weight: 600; margin-bottom: 0.35rem; color: var(--text-secondary);">
-                            <i class="fa-regular fa-calendar text-cyan"></i> End Date:
+                        <label for="exportEndDate" style="display: block; font-size: 0.74rem; font-weight: 600; margin-bottom: 0.25rem; color: var(--text-muted);">
+                            End Date:
                         </label>
                         <input type="date" id="exportEndDate" name="end_date" class="form-control" style="font-size: 0.85rem; padding: 0.45rem 0.65rem;" onchange="validateExportDateRange('end')" oninput="validateExportDateRange('end')">
                     </div>
@@ -3346,18 +3628,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
             </div>
 
-            <div style="background: rgba(16, 185, 129, 0.06); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: var(--radius-sm); padding: 0.65rem 0.85rem; font-size: 0.78rem; color: var(--text-secondary); display: flex; align-items: center; gap: 0.6rem;">
-                <i class="fa-solid fa-file-csv text-emerald" style="font-size: 1.25rem;"></i>
-                <div>
-                    <strong style="color: #34d399;">Excel &amp; Sheets Ready:</strong>
-                    <div class="text-muted" style="font-size: 0.75rem;">Includes date, shift, unit, subcategory, pieces count, and timestamp.</div>
+            <!-- Unit Shift & Single Sheet Information Banner -->
+            <div style="background: rgba(16, 185, 129, 0.06); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: var(--radius-sm); padding: 0.65rem 0.85rem; font-size: 0.78rem; color: var(--text-secondary); display: flex; flex-direction: column; gap: 0.35rem;">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <i class="fa-solid fa-file-excel text-emerald" style="font-size: 1.15rem;"></i>
+                    <strong style="color: #34d399;">Single Sheet Excel &amp; Google Sheets Ready:</strong>
+                </div>
+                <div class="text-muted" style="font-size: 0.74rem; line-height: 1.45;">
+                    • <strong>Consolidated:</strong> Full month, 2-3 months, or 1 year combined seamlessly in 1 sheet.<br>
+                    • <strong>Unit Shift Date Mentioned:</strong> If this worker moved from Unit 1 to Unit 2 mid-month or between months, the sheet automatically highlights the exact switch date and breakdown per unit.
                 </div>
             </div>
 
             <div style="display: flex; gap: 0.6rem; justify-content: flex-end; margin-top: 0.25rem;">
                 <button type="button" class="btn btn-outline btn-sm" onclick="closeDownloadHistoryModal()">Cancel</button>
                 <button type="submit" id="downloadCsvSubmitBtn" class="btn btn-primary btn-sm" style="background: linear-gradient(135deg, #10b981, #059669); border: none; font-weight: 700; display: inline-flex; align-items: center; gap: 0.45rem; padding: 0.55rem 1.15rem; box-shadow: 0 4px 12px rgba(16,185,129,0.3);">
-                    <i class="fa-solid fa-file-arrow-down"></i> Download CSV History
+                    <i class="fa-solid fa-file-arrow-down"></i> <span id="downloadBtnText">Download Sheet (This Month)</span>
                 </button>
             </div>
         </form>
@@ -3397,6 +3683,14 @@ function validateExportDateRange(changedField) {
             btn.classList.remove('btn-primary');
             btn.classList.add('btn-outline');
         });
+        const presetInput = document.getElementById('exportPresetInput');
+        if (presetInput) presetInput.value = 'custom';
+        const rangeBadge = document.getElementById('exportLiveRangeBadge');
+        if (rangeBadge && sVal && eVal) {
+            rangeBadge.innerText = `Custom Range (${sVal} to ${eVal})`;
+        }
+        const btnText = document.getElementById('downloadBtnText');
+        if (btnText) btnText.innerText = 'Download Sheet (Custom Range)';
     }
 
     // Dynamic constraints
@@ -3455,29 +3749,74 @@ function validateExportDateRange(changedField) {
 function setExportPreset(preset) {
     const startInput = document.getElementById('exportStartDate');
     const endInput = document.getElementById('exportEndDate');
+    const presetInput = document.getElementById('exportPresetInput');
+    const rangeBadge = document.getElementById('exportLiveRangeBadge');
+    const btnText = document.getElementById('downloadBtnText');
     if (!startInput || !endInput) return;
+
+    if (presetInput) presetInput.value = preset;
 
     const today = new Date();
     const pad = (n) => n.toString().padStart(2, '0');
     const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
+    let labelText = "This Month";
+    let btnSuffix = "This Month";
+
     if (preset === 'today') {
         const tStr = fmt(today);
         startInput.value = tStr;
         endInput.value = tStr;
+        labelText = `Today (${tStr})`;
+        btnSuffix = "Today";
+    } else if (preset === 'yesterday') {
+        const yDate = new Date(today);
+        yDate.setDate(yDate.getDate() - 1);
+        const yStr = fmt(yDate);
+        startInput.value = yStr;
+        endInput.value = yStr;
+        labelText = `Yesterday (${yStr})`;
+        btnSuffix = "Yesterday";
     } else if (preset === 'this_month') {
         const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
         startInput.value = fmt(firstDay);
         endInput.value = fmt(today);
+        labelText = `This Month (${fmt(firstDay)} to ${fmt(today)})`;
+        btnSuffix = "This Month";
     } else if (preset === 'last_month') {
         const firstDayLastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
         const lastDayLastMonth = new Date(today.getFullYear(), today.getMonth(), 0);
         startInput.value = fmt(firstDayLastMonth);
         endInput.value = fmt(lastDayLastMonth);
+        labelText = `Last Month (${fmt(firstDayLastMonth)} to ${fmt(lastDayLastMonth)})`;
+        btnSuffix = "Last Month";
+    } else if (preset === 'last_2_months') {
+        const firstDay2Mo = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+        startInput.value = fmt(firstDay2Mo);
+        endInput.value = fmt(today);
+        labelText = `Last 2 Months (${fmt(firstDay2Mo)} to ${fmt(today)})`;
+        btnSuffix = "Last 2 Months";
+    } else if (preset === 'last_3_months') {
+        const firstDay3Mo = new Date(today.getFullYear(), today.getMonth() - 2, 1);
+        startInput.value = fmt(firstDay3Mo);
+        endInput.value = fmt(today);
+        labelText = `Last 3 Months / Quarter (${fmt(firstDay3Mo)} to ${fmt(today)})`;
+        btnSuffix = "Last 3 Months";
+    } else if (preset === '1_year' || preset === 'this_year') {
+        const firstDayYear = new Date(today.getFullYear(), 0, 1);
+        startInput.value = fmt(firstDayYear);
+        endInput.value = fmt(today);
+        labelText = `Year ${today.getFullYear()} (${fmt(firstDayYear)} to ${fmt(today)})`;
+        btnSuffix = "1 Year";
     } else if (preset === 'all_time') {
         startInput.value = '';
         endInput.value = '';
+        labelText = "All Time (Complete Whole History)";
+        btnSuffix = "All Time History";
     }
+
+    if (rangeBadge) rangeBadge.innerText = labelText;
+    if (btnText) btnText.innerText = `Download Sheet (${btnSuffix})`;
 
     validateExportDateRange(null);
 
@@ -3487,9 +3826,13 @@ function setExportPreset(preset) {
         btn.classList.add('btn-outline');
     });
     const activeBtnMap = {
+        'today': 'presetToday',
+        'yesterday': 'presetYesterday',
         'this_month': 'presetThisMonth',
         'last_month': 'presetLastMonth',
-        'today': 'presetToday',
+        'last_2_months': 'presetLast2Months',
+        'last_3_months': 'presetLast3Months',
+        '1_year': 'preset1Year',
         'all_time': 'presetAllTime'
     };
     const activeBtn = document.getElementById(activeBtnMap[preset]);

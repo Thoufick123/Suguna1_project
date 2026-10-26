@@ -220,6 +220,26 @@ class Database {
             self::$pdo->exec($sqlAssignments);
         } catch (Exception $e) {}
 
+        // Table: worker_unit_transfers (Track exact date & history when a worker switches units)
+        $sqlTransfers = "
+        CREATE TABLE IF NOT EXISTS worker_unit_transfers (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            worker_id INT NOT NULL,
+            from_unit VARCHAR(50) NOT NULL,
+            to_unit VARCHAR(50) NOT NULL,
+            transfer_date DATE NOT NULL,
+            transfer_type VARCHAR(50) DEFAULT 'permanent',
+            notes TEXT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_worker (worker_id),
+            INDEX idx_date (transfer_date),
+            FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ";
+        try {
+            self::$pdo->exec($sqlTransfers);
+        } catch (Exception $e) {}
+
         // Table: garment_categories (Admin-managed Category, Subcategory, Sub-Subcategory)
         $sqlCategories = "
         CREATE TABLE IF NOT EXISTS garment_categories (
