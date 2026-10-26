@@ -34,7 +34,6 @@ include __DIR__ . '/includes/header.php';
 <div class="page-header">
     <div class="page-header-title">
         <h1><i class="fa-solid fa-trophy text-amber"></i> Workforce Production Leaderboard</h1>
-        <p>Real-time operator rankings based on cumulative pieces completed and manufacturing efficiency.</p>
     </div>
     <div class="page-header-actions">
         <a href="daily_output.php" class="btn btn-outline">
