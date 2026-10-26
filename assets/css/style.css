@@ -3053,6 +3053,23 @@ body.theme-light .drawer-nav-link.active {
         align-items: stretch !important;
         gap: 0.75rem !important;
     }
+    .category-slider-section .card-header > div,
+    .slider-header-title-col,
+    .slider-header-controls-col {
+        flex: 0 0 auto !important;
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+    .slider-header-controls-col {
+        justify-content: flex-start !important;
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 0.65rem !important;
+    }
+    .unit-slider-arrows-row {
+        justify-content: flex-end !important;
+        width: 100% !important;
+    }
     .unit-slider-pill-nav {
         width: 100% !important;
         display: flex !important;

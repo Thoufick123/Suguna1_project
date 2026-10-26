@@ -28,26 +28,49 @@ if (empty($activeCategories)) {
     $activeCategories = ['General'];
 }
 
-// 2. Intelligent Category Mapping Function (Strictly Admin-Added Active Categories)
-$mapMaterialToCategory = function($materialName) use ($gcRows, $activeCategories) {
-    if (empty($materialName)) return $activeCategories[0] ?? 'General';
-    $cleanMat = strtolower(trim($materialName));
-
-    foreach ($gcRows as $row) {
-        if (!empty($row['sub_subcategory_name']) && strtolower(trim($row['sub_subcategory_name'])) === $cleanMat) {
-            return $row['category_name'];
+// 2. Intelligent Category Mapping Function (Category, Subcategory, Worker Assignment & Material Fallback)
+$workerAssignments = [];
+try {
+    $wAssStmt = $pdo->query("SELECT worker_id, category_name FROM worker_work_assignments WHERE status = 'Active'");
+    if ($wAssStmt) {
+        while ($row = $wAssStmt->fetch(PDO::FETCH_ASSOC)) {
+            if (!empty($row['category_name'])) {
+                $workerAssignments[(int)$row['worker_id']] = $row['category_name'];
+            }
         }
-        if (!empty($row['subcategory_name']) && strtolower(trim($row['subcategory_name'])) === $cleanMat) {
-            return $row['category_name'];
+    }
+} catch (Exception $e) {}
+
+$mapMaterialToCategory = function($materialName, $workerId = null) use ($gcRows, $activeCategories, $workerAssignments) {
+    if (!empty($materialName)) {
+        $cleanMat = strtolower(trim($materialName));
+
+        // Direct match on sub_subcategory or subcategory
+        foreach ($gcRows as $row) {
+            if (!empty($row['sub_subcategory_name']) && strtolower(trim($row['sub_subcategory_name'])) === $cleanMat) {
+                return $row['category_name'];
+            }
+            if (!empty($row['subcategory_name']) && strtolower(trim($row['subcategory_name'])) === $cleanMat) {
+                return $row['category_name'];
+            }
+        }
+
+        // Direct or substring match on category
+        foreach ($activeCategories as $cat) {
+            if (strtolower(trim($cat)) === $cleanMat || stripos($cleanMat, strtolower(trim($cat))) !== false) {
+                return $cat;
+            }
         }
     }
 
-    foreach ($activeCategories as $cat) {
-        if (strtolower(trim($cat)) === $cleanMat) return $cat;
+    // Worker's active assigned category
+    if ($workerId && isset($workerAssignments[$workerId])) {
+        return $workerAssignments[$workerId];
     }
 
-    foreach ($activeCategories as $cat) {
-        if (stripos($cleanMat, strtolower(trim($cat))) !== false) return $cat;
+    // Material name fallback if available
+    if (!empty($materialName)) {
+        return ucwords(trim($materialName));
     }
 
     return $activeCategories[0] ?? 'General';
@@ -65,7 +88,7 @@ $allLogs = $logsStmt ? $logsStmt->fetchAll(PDO::FETCH_ASSOC) : [];
 
 // Make sure any mapped category that has piece logs is included in active categories list so cards are displayed
 foreach ($allLogs as $log) {
-    $catMapped = $mapMaterialToCategory($log['material_name']);
+    $catMapped = $mapMaterialToCategory($log['material_name'], (int)$log['worker_id']);
     if (!in_array($catMapped, $activeCategories)) {
         $activeCategories[] = $catMapped;
     }
@@ -88,7 +111,7 @@ foreach ($slideKeys as $sKey) {
 foreach ($allLogs as $log) {
     $unitVal = !empty($log['pl_unit']) ? $log['pl_unit'] : (!empty($log['worker_unit']) ? $log['worker_unit'] : 'Unit 1');
     $u = (strcasecmp($unitVal, 'Unit 2') === 0 || stripos($unitVal, 'PU002') !== false) ? 'Unit 2' : 'Unit 1';
-    $cat = $mapMaterialToCategory($log['material_name']);
+    $cat = $mapMaterialToCategory($log['material_name'], (int)$log['worker_id']);
     if (!isset($categoryData[$u][$cat])) {
         $categoryData[$u][$cat] = ['total_pieces' => 0, 'workers' => []];
     }
@@ -208,8 +231,8 @@ $slidesConfig = [
 <div class="card mb-4 category-slider-section" id="unitCategorySliderSection" style="border: 1px solid rgba(6,182,212,0.3); background: linear-gradient(180deg, rgba(6,182,212,0.04) 0%, rgba(15,23,42,0.95) 100%);">
 
     <!-- Section Header & Controls -->
-    <div class="card-header" style="flex-wrap: wrap; gap: 0.85rem; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 0.85rem; width: 100%; box-sizing: border-box;">
-        <div style="min-width: 0; flex: 1 1 260px; max-width: 100%; box-sizing: border-box;">
+    <div class="card-header slider-header-wrap" style="flex-wrap: wrap; gap: 0.85rem; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 0.85rem; width: 100%; box-sizing: border-box;">
+        <div class="slider-header-title-col">
             <div class="card-title" style="display: flex; align-items: center; gap: 0.65rem; font-size: 1.1rem; font-weight: 800; flex-wrap: wrap; word-break: break-word;">
                 <span style="font-size: 1.3rem;">🏆</span>
                 <span>Category Production Leaderboards</span>
@@ -220,7 +243,7 @@ $slidesConfig = [
         </div>
 
         <!-- Slider Navigation & Unit Switcher -->
-        <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; min-width: 0; flex: 1 1 260px; justify-content: flex-end; box-sizing: border-box; width: 100%;">
+        <div class="slider-header-controls-col">
             <!-- All Units / Unit 1 / Unit 2 Tabs -->
             <div class="unit-slider-pill-nav">
                 <button type="button" class="unit-slide-tab-btn active" id="btnSlideAll" onclick="switchUnitSlide(0)">
@@ -241,7 +264,7 @@ $slidesConfig = [
             </div>
 
             <!-- Prev / Next Slider Arrows -->
-            <div style="display: flex; gap: 0.35rem; flex-shrink: 0;">
+            <div class="unit-slider-arrows-row" style="display: flex; gap: 0.35rem; flex-shrink: 0;">
                 <button type="button" class="btn btn-outline btn-xs" id="btnPrevUnitSlide" title="Previous Slide" onclick="prevUnitSlide()" style="padding: 0.4rem 0.65rem; border-radius: 8px;">
                     <i class="fa-solid fa-chevron-left"></i> Prev
                 </button>
@@ -422,6 +445,56 @@ $slidesConfig = [
 
 <!-- Styles for Split-Screen Leader Carousel -->
 <style>
+.slider-header-title-col {
+    min-width: 0;
+    flex: 1 1 260px;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+.slider-header-controls-col {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    min-width: 0;
+    flex: 1 1 260px;
+    justify-content: flex-end;
+    box-sizing: border-box;
+    width: 100%;
+}
+
+.unit-slider-arrows-row {
+    display: flex;
+    gap: 0.35rem;
+    flex-shrink: 0;
+}
+
+@media (max-width: 768px) {
+    .category-slider-section .card-header {
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 0.75rem !important;
+    }
+    .slider-header-title-col {
+        flex: 0 0 auto !important;
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+    .slider-header-controls-col {
+        flex: 0 0 auto !important;
+        width: 100% !important;
+        justify-content: flex-start !important;
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 0.65rem !important;
+    }
+    .unit-slider-arrows-row {
+        justify-content: flex-end !important;
+        width: 100% !important;
+    }
+}
+
 .unit-badge.unit-all {
     background: rgba(16, 185, 129, 0.15);
     color: #10b981;
